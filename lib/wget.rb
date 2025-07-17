@@ -35,7 +35,7 @@ module Narou
       # Default headers from user's prompt
       cmd_headers << %'--header="User-Agent: #{ua}"'
       cmd_headers << %'--header="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"'
-      cmd_headers << %'--header="Accept-Language: en-US,en;q=0.5"'
+      cmd_headers << %'--header="Accept-Language: ja,en-US;q=0.9,en;q=0.8"'
       cmd_headers << %'--header="Accept-Encoding: gzip, deflate"'
       cmd_headers << %'--header="Accept-Charset: utf-8"'
       cmd_headers << %'--header="Connection: keep-alive"'
