@@ -3,11 +3,10 @@
 require "stringio"
 require "open-uri" # For OpenURI::HTTPError
 require "systemu"
+require_relative "inventory"
 
 module Narou
   module Wget
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
-
     # A StringIO-like object that mimics the object returned by open-uri.
     class WgetIO < StringIO
       attr_reader :meta, :status
@@ -29,13 +28,16 @@ module Narou
     def self.open(uri, *rest, &block)
       options = rest.find { |arg| arg.is_a?(Hash) } || {}
 
+      ua = Inventory.load("local_setting")["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
       # Build wget command
       cmd_headers = []
       # Default headers from user's prompt
-      cmd_headers << %'--header="User-Agent: #{USER_AGENT}"'
+      cmd_headers << %'--header="User-Agent: #{ua}"'
       cmd_headers << %'--header="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"'
       cmd_headers << %'--header="Accept-Language: en-US,en;q=0.5"'
       cmd_headers << %'--header="Accept-Encoding: gzip, deflate"'
+      cmd_headers << %'--header="Accept-Charset: utf-8"'
       cmd_headers << %'--header="Connection: keep-alive"'
 
       # Headers from options hash
