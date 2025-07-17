@@ -4,7 +4,7 @@
 # Copyright 2013 whiteleaf. All rights reserved.
 #
 
-require "open-uri"
+require_relative "wget"
 
 #
 # 挿絵管理

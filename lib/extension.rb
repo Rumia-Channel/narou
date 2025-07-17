@@ -4,18 +4,19 @@
 # Copyright 2013 whiteleaf. All rights reserved.
 #
 
-require "open-uri"
-require "openssl"
-require_relative "inventory"
-
-# open-uri で http → https へのリダイレクトを有効にする
-require "open_uri_redirections"
+require_relative "wget"
 
 # open-uri に渡すオプションを生成（必要に応じて extensions/*.rb でオーバーライドする）
 def make_open_uri_options(add)
-  ua = Inventory.load("local_setting")["user-agent"] || "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-  add.merge(ssl_verify_mode: OpenSSL::SSL::VERIFY_NONE)
-  add.merge("User-Agent" => ua)
+  # This is now handled by the wget wrapper, but we keep the method for compatibility.
+  add
+end
+
+module OpenURI
+  def self.open_uri(name, *rest, &block)
+    # Forward to our wget wrapper
+    Narou::Wget.open(name, *rest, &block)
+  end
 end
 
 #
