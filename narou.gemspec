@@ -60,7 +60,6 @@ Gem::Specification.new do |gem|
   gem.add_runtime_dependency 'memoist', '~> 0.11.0'
   gem.add_runtime_dependency 'systemu', '~> 2.6', '>= 2.6.5'
   gem.add_runtime_dependency 'erubi', '~> 1.13'
-  gem.add_runtime_dependency 'open_uri_redirections', '~> 0.2', '>= 0.2.1'
   gem.add_runtime_dependency 'activesupport', '>= 6.1', '< 8.0'
   gem.add_runtime_dependency 'unicode-display_width', '~> 1.4'
   gem.add_runtime_dependency 'webrick', '~> 1.7'
