@@ -51,10 +51,14 @@ module Narou
       status, stdout, stderr = systemu(command)
 
       unless status.success?
-        if stderr =~ /(\d{3}) (Not Found|Forbidden|Error)/
-          raise OpenURI::HTTPError.new("#{status.exitstatus} #{$2}", nil)
+        http_status_line = stderr.lines.grep(/  HTTP\/\d\.\d /).last
+        if http_status_line && http_status_line =~ /  HTTP\/\d\.\d (\d{3}) (.*)/
+          code = $1
+          msg = $2.strip
+          raise OpenURI::HTTPError.new("#{code} #{msg}", nil)
         else
-          raise OpenURI::HTTPError.new("wget command failed: #{stderr.strip}", nil)
+          # Fallback for other errors
+          raise OpenURI::HTTPError.new("wget command failed with exit code #{status.exitstatus}: #{stderr.strip}", nil)
         end
       end
 
