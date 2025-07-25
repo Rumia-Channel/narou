@@ -494,9 +494,13 @@ class Narou::AppServer < Sinatra::Base
   # フィルター条件に一致する全小説IDを取得
   get "/api/novels/all_ids" do
     begin
+      puts "[DEBUG] /api/novels/all_ids called with params: #{params.inspect}"
       all_ids = get_all_filtered_novel_ids(params)
+      puts "[DEBUG] Retrieved #{all_ids.length} IDs: #{all_ids.inspect}"
       json({ ids: all_ids })
     rescue StandardError => e
+      puts "[ERROR] /api/novels/all_ids error: #{e.message}"
+      puts e.backtrace.join("\n")
       status 500
       json({ error: e.message })
     end
@@ -521,13 +525,15 @@ class Narou::AppServer < Sinatra::Base
     
     # データベースから全データを取得
     database_values = Database.instance.get_object.values
+    puts "[DEBUG] Database values count: #{database_values.length}"
     filtered_data = database_values.map do |data|
       id = data["id"]
+      puts "[DEBUG] Processing novel ID: #{id} (#{id.class})"
       is_frozen = Narou.novel_frozen?(id)
       tags = data["tags"] || []
       
       {
-        id: id.to_s,
+        id: id.to_i,  # 数値として保持
         title: data["title"],
         author: data["author"],
         sitename: data["sitename"],
@@ -607,7 +613,9 @@ class Narou::AppServer < Sinatra::Base
     end
     
     # IDのみを抽出して返す
-    filtered_data.map { |item| item[:id] }
+    result_ids = filtered_data.map { |item| item[:id] }
+    puts "[DEBUG] Final result IDs: #{result_ids.inspect}"
+    result_ids
   end
 
   # 小説一覧処理の共通メソッド
@@ -644,12 +652,16 @@ class Narou::AppServer < Sinatra::Base
     
     # ソート状態をサーバー側に保存
     if order_column && order_dir
+      puts "[DEBUG] Saving sort state: column=#{order_column}, dir=#{order_dir}"
       server_setting = Inventory.load("server_setting", :global)
       server_setting["current_sort"] = {
         "column" => order_column,
         "dir" => order_dir
       }
       server_setting.save
+      puts "[DEBUG] Sort state saved successfully"
+    else
+      puts "[DEBUG] No sort parameters to save: column=#{order_column}, dir=#{order_dir}"
     end
     
     # 軽量なタグ処理モード（大量データ用）
@@ -962,23 +974,76 @@ class Narou::AppServer < Sinatra::Base
   end
 
   post "/api/update" do
-    ids = select_valid_novel_ids(params["ids"]) || []
-    # 現在のソート状態に基づいてIDを並び替え
-    sorted_ids = sort_ids_by_current_sort(ids)
-    opt_arguments = []
-    if params["force"] == "true"
-      opt_arguments << "--force"
-    end
-    Narou::WebWorker.push do
-      puts "<white>更新を開始します（ソート順序: #{sorted_ids.length}件）</white>".termcolor
-      cmd = Command::Update.new
-      if table_reload_timing == "every"
-        cmd.on(:success) do
-          @@push_server.send_all(:"table.reload")
-        end
+    puts "[DEBUG] Update API called"
+    puts "[DEBUG] All params: #{params.inspect}"
+    puts "[DEBUG] params['ids']: #{params["ids"].inspect}"
+    puts "[DEBUG] params['ids'] class: #{params["ids"].class}"
+    puts "[DEBUG] params['update_all']: #{params["update_all"].inspect}"
+    
+    if params["update_all"] == "true"
+      # 全件更新の場合
+      puts "[DEBUG] All novels update requested"
+      
+      # 全小説のIDを取得してソート順序で並び替え
+      database_obj = Database.instance.get_object
+      puts "[DEBUG] Database object keys: #{database_obj.keys.inspect}"
+      puts "[DEBUG] Database object sample values:"
+      database_obj.each_with_index do |(key, value), index|
+        break if index >= 3
+        puts "[DEBUG]   #{key}: {id: #{value['id']}, title: #{value['title']}, general_lastup: #{value['general_lastup']}}"
       end
-      cmd.execute!(sorted_ids, opt_arguments)
-      @@push_server.send_all(:"table.reload")
+      
+      # データベースのIDフィールドから実際のIDを取得
+      all_novel_ids = database_obj.values.map { |data| data["id"].to_s }
+      puts "[DEBUG] All novel IDs from data['id']: #{all_novel_ids.inspect}"
+      sorted_ids = sort_ids_by_current_sort(all_novel_ids)
+      puts "[DEBUG] Sorted all IDs for update: #{sorted_ids.inspect}"
+      
+      opt_arguments = []
+      if params["force"] == "true"
+        opt_arguments << "--force"
+      end
+      Narou::WebWorker.push do
+        puts "<white>全ての小説の更新を開始します（ソート順序: #{sorted_ids.length}件）</white>".termcolor
+        cmd = Command::Update.new
+        if table_reload_timing == "every"
+          cmd.on(:success) do
+            @@push_server.send_all(:"table.reload")
+          end
+        end
+        cmd.execute!(sorted_ids, opt_arguments)
+        @@push_server.send_all(:"table.reload")
+      end
+    else
+      # 選択された小説のみ更新
+      ids = select_valid_novel_ids(params["ids"]) || []
+      puts "[DEBUG] Valid IDs: #{ids.inspect}"
+      
+      # skip_sort パラメータがある場合はソートをスキップ（現在のページ表示順序を維持）
+      if params["skip_sort"] == "true"
+        puts "[DEBUG] Skipping server-side sort, using client order"
+        sorted_ids = ids
+      else
+        # 現在のソート状態に基づいてIDを並び替え
+        sorted_ids = sort_ids_by_current_sort(ids)
+        puts "[DEBUG] Sorted IDs for update: #{sorted_ids.inspect}"
+      end
+      
+      opt_arguments = []
+      if params["force"] == "true"
+        opt_arguments << "--force"
+      end
+      Narou::WebWorker.push do
+        puts "<white>更新を開始します（ソート順序: #{sorted_ids.length}件）</white>".termcolor
+        cmd = Command::Update.new
+        if table_reload_timing == "every"
+          cmd.on(:success) do
+            @@push_server.send_all(:"table.reload")
+          end
+        end
+        cmd.execute!(sorted_ids, opt_arguments)
+        @@push_server.send_all(:"table.reload")
+      end
     end
   end
 

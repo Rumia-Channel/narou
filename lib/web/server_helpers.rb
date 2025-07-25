@@ -55,31 +55,47 @@ module Narou::ServerHelpers
   # 現在のソート状態に基づいてIDを並び替える
   #
   def sort_ids_by_current_sort(ids)
+    puts "[DEBUG] sort_ids_by_current_sort called with #{ids ? ids.length : 0} IDs: #{ids.inspect}"
     return ids unless ids && ids.length > 0
     
     server_setting = Inventory.load("server_setting", :global)
     current_sort = server_setting["current_sort"]
+    puts "[DEBUG] Current sort from server: #{current_sort.inspect}"
     return ids unless current_sort
     
     order_column = current_sort["column"]
     order_dir = current_sort["dir"]
+    puts "[DEBUG] Sort params: column=#{order_column}, dir=#{order_dir}"
     return ids unless order_column && order_dir
     
     column_names = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"]
     sort_column = column_names[order_column]
+    puts "[DEBUG] Sort column: #{sort_column}"
     return ids unless sort_column
     
     # IDから小説データを取得してソート
     database = Database.instance
     novels_data = ids.map do |id|
       data = database[id.to_i]
+      if data
+        puts "[DEBUG] Found data for ID #{id}"
+      else
+        puts "[DEBUG] ID #{id}: not found"
+      end
       data ? [id, data] : nil
     end.compact
     
+    puts "[DEBUG] Found #{novels_data.length} novels with data"
+    
     # ソート実行
+    puts "[DEBUG] Before sort: #{novels_data.map{|n| [n[0], n[1][sort_column]]}.inspect}"
+    
     novels_data.sort! do |a, b|
-      val_a = a[1][sort_column.to_sym] || 0
-      val_b = b[1][sort_column.to_sym] || 0
+      # データベースのHashは文字列キーを使用
+      val_a = a[1][sort_column] || 0
+      val_b = b[1][sort_column] || 0
+      
+      puts "[DEBUG] Comparing ID #{a[0]} (#{val_a}) vs ID #{b[0]} (#{val_b})"
       
       if val_a.is_a?(Numeric) && val_b.is_a?(Numeric)
         comparison = val_a <=> val_b
@@ -87,11 +103,17 @@ module Narou::ServerHelpers
         comparison = val_a.to_s <=> val_b.to_s
       end
       
-      order_dir == "desc" ? -comparison : comparison
+      result = order_dir == "desc" ? -comparison : comparison
+      puts "[DEBUG] Comparison result: #{result} (#{order_dir})"
+      result
     end
     
+    puts "[DEBUG] After sort: #{novels_data.map{|n| [n[0], n[1][sort_column]]}.inspect}"
+    
     # ソート済みのIDのみを返す
-    novels_data.map { |novel| novel[0] }
+    sorted_ids = novels_data.map { |novel| novel[0] }
+    puts "[DEBUG] Sorted IDs: #{sorted_ids.inspect}"
+    sorted_ids
   end
 
   #
