@@ -1142,15 +1142,15 @@ class Narou::AppServer < Sinatra::Base
     
     # convert実行時点でのソート状態が渡された場合はそれを使用
     if params["sort_state"] && params["timestamp"]
-      puts "[DEBUG] Convert with fixed sort state (timestamp: #{params["timestamp"]})"
+      debug_puts "[DEBUG] Convert with fixed sort state (timestamp: #{params["timestamp"]})"
       sorted_ids = sort_ids_with_fixed_state(ids, params["sort_state"])
     else
       # 従来通りの現在のソート状態に基づく並び替え
-      puts "[DEBUG] Convert with current sort state"
+      debug_puts "[DEBUG] Convert with current sort state"
       sorted_ids = sort_ids_by_current_sort(ids)
     end
     
-    puts "[DEBUG] Convert processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    debug_puts "[DEBUG] Convert processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
     concurrency_push do
       CommandLine.run!("convert", "--no-open", sorted_ids)
     end
@@ -1319,11 +1319,11 @@ class Narou::AppServer < Sinatra::Base
     
     # remove実行時点でのソート状態が渡された場合はそれを使用
     if params["sort_state"] && params["timestamp"]
-      puts "[DEBUG] Remove with fixed sort state (timestamp: #{params["timestamp"]})"
+      debug_puts "[DEBUG] Remove with fixed sort state (timestamp: #{params["timestamp"]})"
       sorted_ids = sort_ids_with_fixed_state(ids, params["sort_state"])
     else
       # 従来通りの現在のソート状態に基づく並び替え
-      puts "[DEBUG] Remove with current sort state"
+      debug_puts "[DEBUG] Remove with current sort state"
       sorted_ids = sort_ids_by_current_sort(ids)
     end
     
@@ -1332,7 +1332,7 @@ class Narou::AppServer < Sinatra::Base
       opt_arguments << "--with-file"
     end
     
-    puts "[DEBUG] Remove processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    debug_puts "[DEBUG] Remove processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
     begin
       Narou::WebWorker.push do
         begin
@@ -1354,15 +1354,15 @@ class Narou::AppServer < Sinatra::Base
     
     # remove実行時点でのソート状態が渡された場合はそれを使用
     if params["sort_state"] && params["timestamp"]
-      puts "[DEBUG] Remove with file with fixed sort state (timestamp: #{params["timestamp"]})"
+      debug_puts "[DEBUG] Remove with file with fixed sort state (timestamp: #{params["timestamp"]})"
       sorted_ids = sort_ids_with_fixed_state(ids, params["sort_state"])
     else
       # 従来通りの現在のソート状態に基づく並び替え
-      puts "[DEBUG] Remove with file with current sort state"
+      debug_puts "[DEBUG] Remove with file with current sort state"
       sorted_ids = sort_ids_by_current_sort(ids)
     end
     
-    puts "[DEBUG] Remove with file processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    debug_puts "[DEBUG] Remove with file processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
     begin
       Narou::WebWorker.push do
         begin
@@ -1461,17 +1461,22 @@ class Narou::AppServer < Sinatra::Base
     
     # tag情報取得時点でのソート状態が渡された場合はそれを使用
     if params["sort_state"] && params["timestamp"]
-      puts "[DEBUG] TagInfo with fixed sort state (timestamp: #{params["timestamp"]})"
+      debug_puts "[DEBUG] TagInfo with fixed sort state (timestamp: #{params["timestamp"]})"
       # 固定化された状態でデータを取得
       sorted_ids = sort_ids_with_fixed_state(ids.map(&:to_s), params["sort_state"]).map(&:to_i)
     else
-      puts "[DEBUG] TagInfo with current state"
+      debug_puts "[DEBUG] TagInfo with current state"
       sorted_ids = ids
     end
     
     database = Database.instance
     tag_info = {}
-    database.each_value do |data|
+    
+    # 選択されたIDの小説のタグのみを取得
+    sorted_ids.each do |id|
+      data = database[id]
+      next unless data
+      
       tags = data["tags"] || []
       tags.each do |tag|
         tag_info[tag] ||= {
@@ -1480,12 +1485,10 @@ class Narou::AppServer < Sinatra::Base
           html: decorate_tags([tag]),
           exclusion_html: params["with_exclusion"] ? decorate_exclusion_tags([tag]) : ""
         }
-        if sorted_ids.include?(data["id"])
-          tag_info[tag][:count] += 1
-        end
+        tag_info[tag][:count] += 1
       end
     end
-    puts "[DEBUG] TagInfo processing #{sorted_ids.length} novels for #{tag_info.keys.length} tags"
+    debug_puts "[DEBUG] TagInfo processing #{sorted_ids.length} novels for #{tag_info.keys.length} tags"
     json Hash[tag_info.sort_by { |k, v| k }].values
   end
 
@@ -1494,17 +1497,33 @@ class Narou::AppServer < Sinatra::Base
     
     # tag編集実行時点でのソート状態が渡された場合はそれを使用
     if params["sort_state"] && params["timestamp"]
-      puts "[DEBUG] Tag edit with fixed sort state (timestamp: #{params["timestamp"]})"
+      debug_puts "[DEBUG] Tag edit with fixed sort state (timestamp: #{params["timestamp"]})"
       sorted_ids = sort_ids_with_fixed_state(ids, params["sort_state"])
     else
-      puts "[DEBUG] Tag edit with current sort state"
+      debug_puts "[DEBUG] Tag edit with current sort state"
       sorted_ids = ids
     end
     
-    puts "[DEBUG] Tag edit processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    debug_puts "[DEBUG] Tag edit processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    debug_puts "[DEBUG] Received params: #{params.inspect}"
+    debug_puts "[DEBUG] Received states param: #{params["states"].inspect}"
+    debug_puts "[DEBUG] Received states class: #{params["states"]&.class&.name || 'nil'}"
+    
+    # states パラメータの存在チェック
+    if params["states"].nil? || params["states"].empty?
+      debug_puts "[ERROR] States parameter is nil or empty"
+      return { success: false, error: "No tag states provided" }.to_json
+    end
     
     # key と value を重複を維持したまま反転
-    invert_states = params["states"].inject({}) { |h,(k,v)| (h[v] ||= []) << k; h }
+    begin
+      invert_states = params["states"].inject({}) { |h,(k,v)| (h[v] ||= []) << k; h }
+      debug_puts "[DEBUG] Inverted states: #{invert_states.inspect}"
+    rescue => e
+      debug_puts "[ERROR] Failed to invert states: #{e.message}"
+      debug_puts "[ERROR] States param details: #{params["states"].inspect}"
+      return { success: false, error: e.message }.to_json
+    end
     
     has_additions = false
     has_deletions = false
@@ -1513,14 +1532,14 @@ class Narou::AppServer < Sinatra::Base
       case state.to_i
       when 0
         # タグを削除
-        puts "タグ削除実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
+        debug_puts "タグ削除実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
         Command::Tag.execute!("--delete", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
         has_deletions = true
       when 1
         # 現状を維持(何もしない)
       when 2
         # タグを追加
-        puts "タグ追加実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
+        debug_puts "タグ追加実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
         Command::Tag.execute!("--add", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
         has_additions = true
       end
@@ -1528,13 +1547,13 @@ class Narou::AppServer < Sinatra::Base
     
     # タグ追加がある場合は、データベース書き込み完了を待つ
     if has_additions
-      puts "タグ追加処理のためデータベース同期を待機中..."
+      debug_puts "タグ追加処理のためデータベース同期を待機中..."
       sleep(0.5)  # データベース書き込み完了を待つ
     end
     
     # キャッシュを確実にクリアしてからイベント送信
     Narou::AppServer.clear_all_cache 
-    puts "タグ編集完了 (追加: #{has_additions}, 削除: #{has_deletions}): 全キャッシュクリア後にリロードイベントを送信"
+    debug_puts "タグ編集完了 (追加: #{has_additions}, 削除: #{has_deletions}): 全キャッシュクリア後にリロードイベントを送信"
     
     # テーブルリロードとタグキャンバス更新を順次実行
     @@push_server.send_all(:"table.reload")
