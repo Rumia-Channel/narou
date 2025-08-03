@@ -34,3 +34,19 @@
 .queue.active .queue__sizes {
   background-color: #d9534f !important;
 }
+
+/* Shiftキークリックによるテキスト選択を防ぐ */
+.dataTables_wrapper, #novel-list, #novel-list tbody, #novel-list td, #novel-list tr {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* 入力フィールドとタグ要素では選択を有効にする */
+input, textarea, [contenteditable="true"], .tag[data-tag] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
