@@ -18,6 +18,11 @@ module Helper
   FILENAME_LENGTH_LIMIT = 50
   FOLDER_LENGTH_LIMIT = 50
 
+  def in_docker?
+    return false unless File.exist?('/proc/1/cgroup')
+    File.readlines('/proc/1/cgroup').any? { |line| line.include?('/docker/') || line.include?('/lxc/') }
+  end
+
   def os_windows?
     @@os_is_windows ||= HOST_OS =~ /mswin(?!ce)|mingw|bccwin/i
   end
@@ -32,6 +37,8 @@ module Helper
 
   def determine_os
     case
+    when in_docker?
+      :docker
     when os_windows?
       :windows
     when os_mac?
