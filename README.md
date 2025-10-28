@@ -1,12 +1,6 @@
 # Narou.rb_MOD - 小説家になろうのダウンローダ＆縦書き整形＆管理アプリ。
 
-このプロジェクトは下記プロジェクトの派生です。
-
-- Original Project : [whiteleaf7/narou](https://github.com/whiteleaf7/narou)
-
-- Forked from : [Rumia-Channel/narou](https://github.com/Rumia-Channel/narou)
-
-素晴らしいプロジェクトを作成していただいた、[whiteleaf7](https://github.com/whiteleaf7) さん、[Rumia-Channel](https://github.com/Rumia-Channel) さんに多大なる感謝を。
+プロジェクトを作成していただいた [whiteleaf7](https://github.com/whiteleaf7) 氏、カオスの塊だったこのforkに修正と機能追加を行ってくれた [ponponUSA](https://github.com/ponponusa) 氏に感謝を。
 
 
 ## 概要 - Summary
