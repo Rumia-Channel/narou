@@ -7,6 +7,7 @@
 require "yaml"
 require "fileutils"
 require "ostruct"
+require "sanitize"
 require_relative "narou"
 require_relative "helper"
 require_relative "sitesetting"
@@ -159,7 +160,11 @@ class Downloader
   # toc 読込
   #
   def self.get_toc_data(archive_path)
-    YAML.unsafe_load_file(File.join(archive_path, TOC_FILE_NAME))
+    path = File.join(archive_path, TOC_FILE_NAME)
+    YAML.unsafe_load_file(path)
+  rescue SystemCallError
+    # bootsnap on Windows can raise Errno::E01 errors, fallback to standard YAML
+    YAML.unsafe_load(File.read(path))
   end
 
   def self.get_toc_by_target(target)
@@ -419,7 +424,7 @@ class Downloader
 
     auto_add_tags = Inventory.load("local_setting")["auto-add-tags"]
     if @setting["tag"] && auto_add_tags
-      clean_tag = @setting["tag"].gsub(/<[^>]*>/, '').gsub(/キーワードが設定されていません/, '').gsub(/キーワード/, '').gsub(/\"?\(\?\.\+\?\)\"?/, '').gsub(/\(\?\<?[^)]*\)/, '').strip
+      clean_tag = Sanitize.fragment(@setting["tag"]).gsub(/キーワードが設定されていません/, '').gsub(/キーワード/, '').gsub(/\"?\(\?\.\+\?\)\"?/, '').gsub(/\(\?\<?[^)]*\)/, '').strip
       if clean_tag.length > 0
         new_tags = clean_tag.split(/[ 　]+|&nbsp;/).uniq
         old_tags = (record && record["tags"]) ? record["tags"] : []
@@ -644,7 +649,7 @@ class Downloader
     }
     auto_add_tags = Inventory.load("local_setting")["auto-add-tags"]
     if @setting["tag"] && auto_add_tags
-      clean_tag = @setting["tag"].gsub(/<[^>]*>/, '').gsub(/キーワード/, '').gsub(/\"?\(\?\.\+\?\)\"?/, '').gsub(/\(\?\<?[^)]*\)/, '').strip
+      clean_tag = Sanitize.fragment(@setting["tag"]).gsub(/キーワード/, '').gsub(/\"?\(\?\.\+\?\)\"?/, '').gsub(/\(\?\<?[^)]*\)/, '').strip
       if clean_tag.length > 0
         tags = clean_tag.split(/[ 　]+|&nbsp;/)
         if record && record["tags"]
@@ -1109,7 +1114,12 @@ class Downloader
   def different_section?(old_relative_path, new_subtitle_info)
     path = get_novel_data_dir.join(old_relative_path)
     return true unless path.exist?
-    YAML.unsafe_load_file(path)["element"] != new_subtitle_info["element"]
+    begin
+      YAML.unsafe_load_file(path)["element"] != new_subtitle_info["element"]
+    rescue SystemCallError
+      # bootsnap on Windows can raise Errno::E01 errors, fallback to standard YAML
+      YAML.unsafe_load(File.read(path))["element"] != new_subtitle_info["element"]
+    end
   end
 
   #
@@ -1360,6 +1370,11 @@ class Downloader
     YAML.unsafe_load_file(get_novel_data_dir.join(filename))
   rescue Errno::ENOENT
     nil
+  rescue SystemCallError => e
+    # bootsnap on Windows can raise Errno::E01 errors, fallback to standard YAML
+    path = get_novel_data_dir.join(filename)
+    return nil unless File.exist?(path)
+    YAML.unsafe_load(File.read(path))
   end
 
   #

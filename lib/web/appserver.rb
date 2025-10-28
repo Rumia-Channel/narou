@@ -11,6 +11,9 @@ require "socket"
 require "sinatra/base"
 require "sinatra/json"
 require "sinatra/reloader" if $development
+require "securerandom"
+require "rack/session"
+require "rack/protection"
 # require "better_errors" if $debug
 require "tilt/erubi"
 require "tilt/haml"
@@ -33,6 +36,7 @@ class Narou::AppServer < Sinatra::Base
   configure do
     set :app_file, __FILE__
     set :erb, trim: "-"
+    set :quiet, true
     enable :protection
     enable :sessions
 
@@ -41,7 +45,8 @@ class Narou::AppServer < Sinatra::Base
     end
 
     set :environment, :production unless $development
-    set :server, :webrick
+    set :server, :puma
+    set :server_settings, { Silent: true }
 
     if $debug
       use BetterErrors::Middleware
@@ -162,19 +167,17 @@ class Narou::AppServer < Sinatra::Base
   end
 
   # サーバーの認証の設定
-  # とりあえずDigest認証のみ
+  # - Digest認証がRackの機能からオミットされたので、Basic認証に変更
   def setup_server_authentication
-    auth = Inventory.load("global_setting", :global).group("server-digest-auth")
+    auth = Inventory.load("global_setting", :global).group("server-basic-auth")
     user = auth.user
-    hashed = auth.hashed_password
-    passwd = hashed || auth.password
+    passwd = auth.password  # ハッシュは使わない
 
-    # enableかつユーザー名とパスワードが設定されている時のみ認証を有効にする
     return unless auth.enable && user && passwd
 
     self.class.class_exec do
-      use Rack::Auth::Digest::MD5, { realm: "narou.rb", opaque: "", passwords_hashed: hashed } do |username|
-        passwd if username == user
+      use Rack::Auth::Basic, "narou.rb" do |username, password|
+        username == user && password == passwd
       end
     end
   end
@@ -429,7 +432,13 @@ class Narou::AppServer < Sinatra::Base
     postscripts_count = 0
     toc["subtitles"].each do |sub|
       begin
-        element = YAML.unsafe_load_file(downloader.section_file_path(sub))["element"]
+        section_path = downloader.section_file_path(sub)
+        begin
+          element = YAML.unsafe_load_file(section_path)["element"]
+        rescue SystemCallError
+          # bootsnap on Windows can raise Errno::E01 errors, fallback to standard YAML
+          element = YAML.unsafe_load(File.read(section_path))["element"]
+        end
         data_type = element["data_type"] || "text"
         introduction = element["introduction"] || ""
         postscript = element["postscript"] || ""

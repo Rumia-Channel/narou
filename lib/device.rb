@@ -24,6 +24,9 @@ class Device
   end
 
   case Helper.determine_os
+  when :docker
+    require_relative "device/library/docker"
+    extend Device::Library::Docker
   when :windows
     require_relative "device/library/windows"
     extend Device::Library::Windows
