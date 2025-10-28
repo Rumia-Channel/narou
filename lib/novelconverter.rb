@@ -280,17 +280,17 @@ class NovelConverter
         return :error
       end
 
-      content = opf_body.dup
+      content = opf_body.dup.force_encoding("UTF-8")
       content.gsub!(/<dc:subject>.*?<\/dc:subject>\s*\n?\s*/m, "")
       dc_subject_lines = subjects.map(&:strip).reject(&:empty?).map { |s|
         esc = s.gsub("&","&amp;").gsub("<","&lt;").gsub(">","&gt;").gsub("\"","&quot;").gsub("'","&apos;")
-        "    <dc:subject>#{esc}</dc:subject>"
+        "\t\t<dc:subject>#{esc}</dc:subject>"
       }
       if dc_subject_lines.any?
         dc_subjects_xml = dc_subject_lines.join("\n") + "\n"
         content.sub!(/(\s*)<\/metadata>/, "\n#{dc_subjects_xml}\\1</metadata>")
       end
-      entries[opf_name] = content
+      entries[opf_name] = content.b
 
       # 再Zip化 (mimetypeは無圧縮で先頭)
       File.delete(epub_path)
