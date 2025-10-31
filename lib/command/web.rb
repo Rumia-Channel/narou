@@ -5,12 +5,6 @@
 #
 
 require_relative "../tty_helper"
-require_relative "../worker"
-require_relative "../command"
-
-# Web UIで必要なコマンドを事前ロード
-Command.require_command("convert")
-Command.require_command("update")
 
 module Command
   class Web < CommandBase
@@ -113,7 +107,7 @@ module Command
             argv = argv_copy.dup
             argv.push("--no-browser", "--reboot")
           end
-        rescue Interrupt => e
+        rescue Interrupt
           # 中断されてコンソールへの入力が可能になってから、WEBrick が終了するまで
           # タイムラグがあって表示がごちゃまぜになるので、終わるのを少し待つ
           sleep 1
@@ -122,11 +116,13 @@ module Command
     end
 
     def kill_threads
+      return unless worker_available?
       Narou::Worker.stop
     end
 
+    # rubocop:disable Metrics/AbcSize
     def boot
-      require_relative "../web/all"
+      load_web_dependencies
       confirm_of_first
       params = Narou::AppServer.create_address(@options["port"])
       push_server = create_push_server(params)
@@ -149,37 +145,40 @@ module Command
                    $stdout
                  end
       ProgressBar.push_server = push_server
-      Narou::Worker.push_server = push_server
+      if worker_available?
+        Narou::Worker.push_server = push_server
+      end
       Narou::AppServer.push_server = push_server
       Narou::WebWorker.run
 
       # 自動アップデートスケジューラーを開始
       require_relative "update/scheduler"
-      Command::Update::Scheduler.start
+      Command.load_command("update")::Scheduler.start
 
       Narou::AppServer.run!
-      
+
       # 自動アップデートスケジューラーを停止
-      Command::Update::Scheduler.stop
-      
+      Command.load_command("update")::Scheduler.stop
+
       push_server.quit
       Narou::WebWorker.stop
-      Narou::Worker.stop
+      Narou::Worker.stop if worker_available?
       if Narou::AppServer.request_reboot?
         exit Narou::EXIT_REQUEST_REBOOT
       end
     rescue Errno::EADDRINUSE => e
       Helper.open_browser(address) unless @options["no-browser"]
-      STDOUT.puts <<-EOS
-#{e}
-ポートが使われています。サーバがすでに立ち上がっているかどうか確認して下さい。
-他のアプリケーションが使っているポートだった場合、ポートを変更して下さい。
+      $stdout.puts <<~PORT_IN_USE
+        #{e}
+        ポートが使われています。サーバがすでに立ち上がっているかどうか確認して下さい。
+        他のアプリケーションが使っているポートだった場合、ポートを変更して下さい。
 
-ポートの変更方法
-  $ narou s server-port=5678
-      EOS
+        ポートの変更方法
+          $ narou s server-port=5678
+      PORT_IN_USE
       exit Narou::EXIT_ERROR_CODE
     end
+    # rubocop:enable Metrics/AbcSize
 
     def open_browser_when_server_boot(address)
       return if @options["no-browser"]
@@ -201,6 +200,22 @@ module Command
         puts "<yellow>再起動が完了しました。</yellow>".termcolor
         push_server.send_all(:"server.rebooted")
       end
+    end
+
+    private
+
+    def worker_available?
+      defined?(Narou::Worker)
+    end
+
+    def load_web_dependencies
+      Command.require_all
+      require_relative "../narou_logger"
+      require_relative "../downloader"
+      require_relative "../sitesetting"
+      require_relative "../database"
+      require_relative "../html"
+      require_relative "../web/all"
     end
 
   end

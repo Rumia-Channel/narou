@@ -6,8 +6,6 @@
 
 # rubocop:disable Style/ClassAndModuleChildren
 
-require_relative "../command"
-
 module Narou::ServerHelpers
   RELOAD_TIMING_DEFAULT = "every"
 

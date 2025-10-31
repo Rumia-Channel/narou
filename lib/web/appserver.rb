@@ -18,24 +18,12 @@ require "rack/protection"
 require "tilt/erubi"
 require "tilt/haml"
 require "tilt/sass"
-require_relative "../command"
 require_relative "../commandline"
 require_relative "../inventory"
-require_relative "../database"
-require_relative "../downloader"
-require_relative "../sitesetting"
 require_relative "web_worker"
 require_relative "pushserver"
 require_relative "settingmessages"
 require_relative "server_helpers"
-
-# Web UI で使用するコマンドを事前にロード
-Command.require_command("version")
-Command.require_command("setting")
-Command.require_command("update")
-Command.require_command("diff")
-Command.require_command("tag")
-Command.require_command("csv")
 
 class Narou::AppServer < Sinatra::Base
   register Sinatra::Reloader if $development
