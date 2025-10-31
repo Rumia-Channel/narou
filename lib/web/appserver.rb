@@ -1714,6 +1714,25 @@ class Narou::AppServer < Sinatra::Base
     redirect "/resources/images/dl_button1.gif"
   end
 
+  # 外部APIからのダウンロード登録（JSON形式でレスポンス）
+  get "/api/download_request" do
+    target = params["target"] or error("need a parameter: `target'")
+    opt_mail = "--mail" if query_to_boolean(params["mail"])
+    
+    already_exists = Downloader.get_id_by_target(target)
+    
+    content_type :json
+    if already_exists
+      { status: 1, id: already_exists }.to_json
+    else
+      Narou::WebWorker.push do
+        CommandLine.run!("download", target, opt_mail)
+        @@push_server.send_all(:"table.reload")
+      end
+      { status: 0, id: nil }.to_json
+    end
+  end
+
   # ダウンロード済みかどうかで表示が変わる画像
   get "/api/downloadable.gif" do
     target = params["target"]
