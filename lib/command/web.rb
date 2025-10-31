@@ -5,6 +5,12 @@
 #
 
 require_relative "../tty_helper"
+require_relative "../worker"
+require_relative "../command"
+
+# Web UIで必要なコマンドを事前ロード
+Command.require_command("convert")
+Command.require_command("update")
 
 module Command
   class Web < CommandBase
@@ -99,7 +105,7 @@ module Command
         begin
           loop do
             if $development
-              system(RbConfig.ruby, "-x", $0, "web", *argv)
+              system(RbConfig.ruby, "-x", "--", $0, "web", *argv)
             else
               system("narou", "web", *argv)
             end
@@ -146,11 +152,11 @@ module Command
       Narou::Worker.push_server = push_server
       Narou::AppServer.push_server = push_server
       Narou::WebWorker.run
-      
+
       # 自動アップデートスケジューラーを開始
       require_relative "update/scheduler"
       Command::Update::Scheduler.start
-      
+
       Narou::AppServer.run!
       
       # 自動アップデートスケジューラーを停止

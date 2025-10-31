@@ -6,6 +6,8 @@
 
 # rubocop:disable Style/ClassAndModuleChildren
 
+require_relative "../command"
+
 module Narou::ServerHelpers
   RELOAD_TIMING_DEFAULT = "every"
 
@@ -13,8 +15,9 @@ module Narou::ServerHelpers
   # タグをHTMLで装飾する
   #
   def decorate_tags(tags)
+    tag_command = Command.load_command("tag")
     tags.sort.map do |tag|
-      %!<span class="tag label label-#{Command::Tag.get_color(tag)}" data-tag="#{escape_html(tag)}">#{escape_html(tag)}</span>!
+      %!<span class="tag label label-#{tag_command.get_color(tag)}" data-tag="#{escape_html(tag)}">#{escape_html(tag)}</span>!
     end.join(" ")
   end
 
@@ -22,8 +25,9 @@ module Narou::ServerHelpers
   # タグをHTMLで装飾する(除外タグ指定用)
   #
   def decorate_exclusion_tags(tags)
+    tag_command = Command.load_command("tag")
     tags.sort.map do |tag|
-      %!<span class="tag label label-#{Command::Tag.get_color(tag)}" data-exclusion-tag="#{escape_html(tag)}">^tag:#{escape_html(tag)}</span>!
+      %!<span class="tag label label-#{tag_command.get_color(tag)}" data-exclusion-tag="#{escape_html(tag)}">^tag:#{escape_html(tag)}</span>!
     end.join(" ")
   end
 
