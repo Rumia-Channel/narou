@@ -68,7 +68,13 @@ module Command
     def create_push_server(params)
       host, port = params[:host], params[:port]
       push_server = Narou::PushServer.instance
-      accepted_domains = (host == "0.0.0.0" ? "*" : host)
+      accepted_domains = if host == "0.0.0.0"
+                           "*"
+                         elsif host == "127.0.0.1"
+                           ["127.0.0.1", "localhost"]
+                         else
+                           host
+                         end
       if accepted_domains != "*"
         global_setting = Inventory.load("global_setting", :global)
         addtional_accepted_domains = global_setting["server-ws-add-accepted-domains"]
