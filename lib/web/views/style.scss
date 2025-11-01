@@ -1,3 +1,4 @@
+@use "sass:color";
 /*! -*- coding: utf-8 -*-
  *
  * Copyright 2013 whiteleaf. All rights reserved.
@@ -95,11 +96,10 @@ table#novel-list {
   $thead-background-color: #605555;
   $odd-color: #f8f3e5;
   $even-color: #fffcef;
-  $novel-list-border-color: mix($odd-color, $thead-background-color, 80%);
+  $novel-list-border-color: color.mix($odd-color, $thead-background-color, 80%);
 
   font-size: 0.8em;
   color: $default-color;
-  //border-color: darken($odd-color, 20%);
   border-color: $novel-list-border-color;
   background-color: $even-color;
 
@@ -118,7 +118,6 @@ table#novel-list {
   td {
     padding: 4px !important;
     vertical-align: middle;
-    //border-color: darken($odd-color, 20%);
     border-color: $novel-list-border-color;
     background-color: inherit;
   }
@@ -153,7 +152,7 @@ table#novel-list {
       background-color: #f8f3e5;
     }
   }
-  $selected-color: mix($odd-color, rgba(255,212,0,0.5));
+  $selected-color: color.mix($odd-color, rgba(255,212,0,0.5));
   //$selected-color: #90cebc;
   $selected-hover-color: #ded;
   
@@ -168,7 +167,7 @@ table#novel-list {
       color: $default-color !important;
       overflow: hidden;
       &.sorting_1 {
-        background-color: mix($selected-color, black, 96%) !important;
+        background-color: color.mix($selected-color, black, 96%) !important;
       }
     }
     td > div {
@@ -194,24 +193,23 @@ table#novel-list {
     tr:hover td {
       background-color: $selected-hover-color !important;
       &.sorting_1 {
-        background-color: mix($selected-hover-color, black, 97%) !important;
+        background-color: color.mix($selected-hover-color, black, 97%) !important;
       }
     }
     tr:hover.selected td {
       background-color: $selected-color !important;
       &.sorting_1 {
-        background-color: mix($selected-color, black, 96%) !important;
+        background-color: color.mix($selected-color, black, 96%) !important;
       }
     }
   }
   $frozen-color: #6caddd;
   tr.frozen td {
-    $frozen-background-color: mix($even-color, $frozen-color, 88%);
-    color: lighten($default-color, 25%);
+    $frozen-background-color: color.mix($even-color, $frozen-color, 88%);
+    color: color.adjust($default-color, $lightness: 25%);
     background-color: $frozen-background-color;
     &.sorting_1 {
-      //background-color: darken($frozen-background-color, 3%);
-      background-color: mix($frozen-background-color, black, 97%);
+      background-color: color.mix($frozen-background-color, black, 97%);
     }
     &.column-id > div:before {
       content: "＊";
@@ -220,10 +218,10 @@ table#novel-list {
     }
   }
   tr.frozen.selected td {
-    color: lighten($default-color, 30%) !important;
+    color: color.adjust($default-color, $lightness: 30%) !important;
   }
   tr.frozen.selected td.column-id > div:before {
-    color: darken($frozen-color, 20%);
+    color: color.adjust($frozen-color, $lightness: -20%);
   }
   thead {
     .sorting_asc {
@@ -256,7 +254,7 @@ table#novel-list {
   .gl-60minutes {
     &::after {
       content: "1h";
-      background-color: lighten(red, 23%);
+      background-color: color.adjust(red, $lightness: 23%);
 
       position: relative;
       left: 4px;
@@ -284,7 +282,7 @@ table#novel-list {
   .gl-24hour {
     &::after {
       content: "24h";
-      background-color: lighten(blue, 30%);
+      background-color: color.adjust(blue, $lightness: 23%);
 
       position: relative;
       left: 4px;
@@ -298,8 +296,8 @@ table#novel-list {
   .gl-3days {
     &::after {
       content: "3d";
-      color: darken(gray, 15%);
-      background-color: lighten(mix(gray, blue, 70%), 40%);
+      color: color.adjust(gray, $lightness: -15%);;
+      background-color: color.adjust(color.mix(gray, blue, 70%), $lightness: 40%);
 
       position: relative;
       left: 4px;
@@ -312,8 +310,8 @@ table#novel-list {
   .gl-1week {
     &::after {
       content: "1w";
-      color: darken(gray, 15%);
-      background-color: lighten(mix(blue, white, 30%), 50%);
+      color: color.adjust(gray, $lightness: -15%);;
+      background-color: color.adjust(color.mix(blue, white, 30%), $lightness: 50%);
 
       position: relative;
       left: 4px;
@@ -760,7 +758,7 @@ $console-color: white;
   text-shadow: 1px 1px 2px #000, -1px 1px 2px #000, 1px -1px 2px #000, -1px -1px 2px #000;
 
   span:hover {
-    color: mix($console-color, red, 80%);
+    color: color.mix($console-color, red, 80%);
   }
 }
 
@@ -990,7 +988,7 @@ $console-color: white;
     font-weight: bold;
 
     .number {
-      background-color: lighten(purple, 10%);
+      background-color: color.adjust(purple, $lightness: 10%);;
       vertical-align: top;
     }
   }
@@ -1071,7 +1069,7 @@ $console-color: white;
 
       &:hover {
         background-color: #eef;
-        color: mix(blue, black);
+        color: color.mix(blue, black);
       }
 
       .date {
@@ -1261,4 +1259,46 @@ $console-color: white;
   cursor: pointer;
   @include opacity(0.3);
   z-index: 1040;
+}
+
+// Bootsnap Status
+.zap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  border-radius: 50%;
+  border: 3px solid currentColor;
+  font-size: 1em;
+  font-weight: 900;
+  line-height: 1;
+  margin-right: -3.4px;
+  margin-left: -3.4px;
+  margin-bottom: 4.3px;
+  vertical-align: middle;
+  transition: all 0.3s ease;
+}
+
+.zap.on  {
+  color: #f5c518;
+  box-shadow: 0 0 6px rgba(245,197,24,0.6);
+}
+.zap.off {
+  color: #9aa0a6;
+  opacity: 0.85;
+  border-color: #9aa0a6;
+}
+
+.zap.on.glow {
+  animation: zapGlow 2s ease-in-out infinite;
+}
+
+@keyframes zapGlow {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(245,197,24,0.6);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(245,197,24,0.9);
+  }
 }
