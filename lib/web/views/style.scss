@@ -698,6 +698,7 @@ $console-color: white;
   text-align: left;
   position: relative;
   overflow: hidden;
+  overscroll-behavior: contain;
   padding: 5px 15px 5px 15px;
   border-width: 0;
   border-radius: 4px;
