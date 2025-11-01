@@ -5,6 +5,7 @@
 #
 
 require "singleton"
+require "forwardable"
 require_relative "mixin/all"
 
 module Narou
@@ -103,6 +104,7 @@ module Narou
     end
 
     def stop
+      return if worker_thread.nil? || !worker_thread.alive?
       cancel
       # killは非推奨、安全な終了処理を実装
       if worker_thread&.alive?
@@ -110,10 +112,9 @@ module Narou
           # ワーカースレッドに終了要求
           worker_thread.raise(Interrupt)
           # 最大2秒待機
-          unless worker_thread.join(2)
-            # 応答しない場合のみkill
-            worker_thread.kill
-          end
+          worker_thread.join(2)
+        rescue Interrupt
+          # join中のInterruptは無視
         rescue
           worker_thread&.kill
         end

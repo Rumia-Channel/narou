@@ -41,7 +41,7 @@ class Narou::AppServer < Sinatra::Base
     enable :sessions
 
     set(:version) do
-      Command::Version.create_version_string
+      Command.load_command("version").create_version_string
     end
 
     set :environment, :production unless $development
@@ -86,14 +86,12 @@ class Narou::AppServer < Sinatra::Base
     global_setting = Inventory.load("global_setting", :global)
     port, bind = global_setting["server-port"], global_setting["server-bind"]
     port = user_port if user_port
-    ipaddress = my_ipaddress
     unless port
       port = rand(4000..65000)
       global_setting["server-port"] = port
       global_setting.save
     end
-#    bind = "127.0.0.1" if bind == "localhost"
-    host = bind ? bind : ipaddress
+    host = bind || "127.0.0.1"
     set :port, port
     set :bind, host
     {
@@ -219,7 +217,7 @@ class Narou::AppServer < Sinatra::Base
 
   before "/settings" do
     @title = "環境設定"
-    @setting_variables = Command::Setting.get_setting_variables
+    @setting_variables = Command.load_command("setting").get_setting_variables
     @error_list = {}
     @global_replace_pattern = @replace_pattern = Narou.global_replace_pattern
   end
@@ -254,7 +252,7 @@ class Narou::AppServer < Sinatra::Base
     # されないように最後にまわす
     built_arguments << "device=#{device}" if device
     unless built_arguments.empty?
-      setting = Command::Setting.new
+      setting = Command.load_command("setting").new
       setting.on(:error) do |msg, name|
         if name
           @error_list[name] = msg
@@ -266,8 +264,8 @@ class Narou::AppServer < Sinatra::Base
       # 自動アップデート設定が変更された場合、スケジューラーを再起動
       if built_arguments.any? { |arg| arg.start_with?("update.auto-schedule") }
         require_relative "../command/update/scheduler"
-        Command::Update::Scheduler.stop
-        Command::Update::Scheduler.start
+        Command.load_command("update")::Scheduler.stop
+        Command.load_command("update")::Scheduler.start
       end
     end
 
@@ -1226,7 +1224,7 @@ class Narou::AppServer < Sinatra::Base
       end
       Narou::WebWorker.push do
         puts "<white>全ての小説の更新を開始します（#{sorted_ids.length}件を#{current_sort_display_string}で処理）</white>".termcolor
-        cmd = Command::Update.new
+        cmd = Command.load_command("update").new
         if table_reload_timing == "every"
           cmd.on(:success) do
             @@push_server.send_all(:"table.reload")
@@ -1265,7 +1263,7 @@ class Narou::AppServer < Sinatra::Base
       end
       Narou::WebWorker.push do
         puts "<white>更新を開始します（#{sorted_ids.length}件を#{current_sort_display_string}で処理）</white>".termcolor
-        cmd = Command::Update.new
+        cmd = Command.load_command("update").new
         if table_reload_timing == "every"
           cmd.on(:success) do
             @@push_server.send_all(:"table.reload")
@@ -1289,7 +1287,7 @@ class Narou::AppServer < Sinatra::Base
     end
     pass if tag_params.empty?
     Narou::WebWorker.push do
-      cmd = Command::Update.new
+      cmd = Command.load_command("update").new
       if table_reload_timing == "every"
         cmd.on(:success) do
           @@push_server.send_all(:"table.reload")
@@ -1446,7 +1444,7 @@ class Narou::AppServer < Sinatra::Base
   get "/api/diff_list" do
     target = params["target"] or return ""
     id = Downloader.get_id_by_target(target) or return ""
-    @list = Command::Diff.new.get_diff_list(id)
+    @list = Command.load_command("diff").new.get_diff_list(id)
     haml :_diff_list, layout: false
   end
 
@@ -1496,11 +1494,11 @@ class Narou::AppServer < Sinatra::Base
     result =
       +'<div><span class="tag tag-reset label label-default" data-tag="">タグ検索を解除</span></div>' \
       '<div class="text-muted" style="font-size:10px">Altキーを押しながらで除外検索</div>'
-    tagname_list = Command::Tag.get_tag_list.keys
+    tagname_list = Command.load_command("tag").get_tag_list.keys
     tagname_list.sort.each do |tagname|
       result << "<div>#{decorate_tags([tagname])} " \
                 "<span class='select-color-button' data-target-tag='#{h tagname}'>" \
-                "<span class='#{Command::Tag.get_color(tagname)}'>a</span></span></div>"
+                "<span class='#{Command.load_command("tag").get_color(tagname)}'>a</span></span></div>"
     end
     result
   end
@@ -1523,7 +1521,7 @@ class Narou::AppServer < Sinatra::Base
     tag_info = {}
     
     # まず全体のタグ一覧を取得（すべてのタグを選択肢として表示するため）
-    all_tags = Command::Tag.get_tag_list
+    all_tags = Command.load_command("tag").get_tag_list
     all_tags.each do |tag, total_count|
       tag_info[tag] = {
         count: 0,
@@ -1592,14 +1590,14 @@ class Narou::AppServer < Sinatra::Base
       when 0
         # タグを削除
         debug_puts "タグ削除実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
-        Command::Tag.execute!("--delete", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
+        Command.load_command("tag").execute!("--delete", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
         has_deletions = true
       when 1
         # 現状を維持(何もしない)
       when 2
         # タグを追加
         debug_puts "タグ追加実行: #{tags.join(', ')} (対象ID: #{sorted_ids.join(', ')})"
-        Command::Tag.execute!("--add", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
+        Command.load_command("tag").execute!("--add", tags.join(" "), sorted_ids, io: Narou::NullIO.new)
         has_additions = true
       end
     end
@@ -1673,7 +1671,7 @@ class Narou::AppServer < Sinatra::Base
       content_type "application/csv"
       attachment "novels.csv"
 
-      csv_command = Command::Csv.new
+      csv_command = Command.load_command("csv").new
       result = csv_command.generate
       puts "CSVファイルをエクスポートしました (#{result.bytesize} bytes)"
       result
@@ -1688,7 +1686,7 @@ class Narou::AppServer < Sinatra::Base
   post "/api/csv/import" do
     begin
       files = params["files"] or pass
-      csv = Command::Csv.new
+      csv = Command.load_command("csv").new
       imported_count = 0
       files.each do |file|
         csv.import(file[:tempfile])
@@ -1712,6 +1710,25 @@ class Narou::AppServer < Sinatra::Base
       @@push_server.send_all(:"table.reload")
     end
     redirect "/resources/images/dl_button1.gif"
+  end
+
+  # 外部APIからのダウンロード登録（JSON形式でレスポンス）
+  get "/api/download_request" do
+    target = params["target"] or error("need a parameter: `target'")
+    opt_mail = "--mail" if query_to_boolean(params["mail"])
+    
+    already_exists = Downloader.get_id_by_target(target)
+    
+    content_type :json
+    if already_exists
+      { status: 1, id: already_exists }.to_json
+    else
+      Narou::WebWorker.push do
+        CommandLine.run!("download", target, opt_mail)
+        @@push_server.send_all(:"table.reload")
+      end
+      { status: 0, id: nil }.to_json
+    end
   end
 
   # ダウンロード済みかどうかで表示が変わる画像
@@ -1851,3 +1868,5 @@ class Narou::AppServer < Sinatra::Base
     puts message if ENV["NAROU_DEBUG"] == "1"
   end
 end
+
+
