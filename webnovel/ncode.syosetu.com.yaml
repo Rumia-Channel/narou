@@ -110,5 +110,5 @@ l: |-
 
 # tag キーワード
 tags: |-
-  <dt class="p-infotop-data__title">\s*キーワード\s*</dt>[\s\S]*?<dd class="p-infotop-data__value">\s*(?!<span class="text-empty">キーワードが設定されていません</span>)
-  (?<tag>[\s\S]*?)\s*</dd>
+  <dt class="p-infotop-data__title">\s*キーワード\s*</dt>\s*<dd class="p-infotop-data__value">\s*
+  (?<tag>(?:(?!キーワードが設定されていません)[\s\S])*?)\s*</dd>
