@@ -1629,8 +1629,8 @@ class Downloader
   end
 
   def replace_external_properties_of_setting
-    @setting["title"] = @setting["title"].delete("\r\n")
-    @setting["author"] = @setting["author"].delete("\r\n")
+    @setting["title"]  = @setting["title"]&.delete("\r\n")  || ""
+    @setting["author"] = @setting["author"]&.delete("\r\n") || ""
   end
 end
 
