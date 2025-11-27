@@ -23,7 +23,7 @@ module Inventory
     # キャッシュサイズ制限（メモリリーク対策）
     # 重要な設定ファイルは保護、一時的なもののみ削除
     if @@cache.size > 200  # 上限を大幅に引き上げ
-      protected_keys = ["local_setting", "database", "global_setting", "latest_convert", "section_convert_cache", "section_hash_cache"]
+      protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
       removable_keys = @@cache.keys - protected_keys
       
       if removable_keys.any?
@@ -57,6 +57,30 @@ module Inventory
     @mutex = Monitor.new
     @inventory_file_path = File.join(dir, name + ".yaml")
     return unless File.exist?(@inventory_file_path)
+
+    # キャッシュサイズが大きくなるファイルは CacheLoader を通さずに直接ロードする
+    # CacheLoader は結果をメモリに保持し続けるため、これらの巨大なファイルがキャッシュされると
+    # メモリリークの原因となる。
+    # また、Inventory は読み込んだハッシュを直接変更するため、CacheLoader が保持するハッシュも
+    # 更新されてしまい、GC対象にならなくなる。
+    if ["section_convert_cache", "section_hash_cache", "database"].include?(name)
+      yaml = File.read(@inventory_file_path, mode: "r:BOM|UTF-8")
+      begin
+        self.merge!(YAML.unsafe_load(yaml))
+      rescue Psych::SyntaxError
+        unless restore(@inventory_file_path)
+          error "#{@inventory_file_path} が壊れてるっぽい"
+          raise
+        end
+        begin
+          self.merge!(YAML.unsafe_load_file(@inventory_file_path))
+        rescue SystemCallError
+          self.merge!(YAML.unsafe_load(File.read(@inventory_file_path)))
+        end
+      end
+      return
+    end
+
     self.merge!(Helper::CacheLoader.memo(@inventory_file_path) { |yaml|
       begin
         YAML.unsafe_load(yaml)

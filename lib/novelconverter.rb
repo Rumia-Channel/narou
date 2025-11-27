@@ -210,7 +210,6 @@ class NovelConverter
     if Helper.os_cygwin?
       abs_srcpath = Helper.convert_to_windows_path(abs_srcpath)
     end
-    Dir.chdir(aozoraepub3_dir)
     command = %!java #{java_encoding} -cp #{aozoraepub3_basename} AozoraEpub3 -enc UTF-8 -of #{device_option} ! +
               %!#{cover_option} #{dst_option} #{ext_option} #{yokogaki_option} "#{abs_srcpath}"!
     if Helper.os_windows?
@@ -219,11 +218,10 @@ class NovelConverter
     activate_dakuten_font_files if use_dakuten_font
     stream_io.print "AozoraEpub3でEPUBに変換しています"
     begin
-      res = Helper::AsyncCommand.exec(command) do
+      res = Helper::AsyncCommand.exec(command, chdir: aozoraepub3_dir) do
         stream_io.print "."
       end
     ensure
-      Dir.chdir(pwd)
       inactivate_dakuten_font_files if use_dakuten_font
     end
 

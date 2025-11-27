@@ -463,37 +463,54 @@ module Helper
   # end
   #
   class AsyncCommand
-    def self.exec(command, sleep_time = 0.5, &block)
-      looper = nil
+    def self.exec(command, sleep_time = 0.5, chdir: nil, &block)
       _pid = nil
-      status, stdout, stderr = systemu(command) do |pid|
-        _pid = pid
-        looper = Thread.new(pid) do |pid|
-          loop do
-            block.call if block
-            sleep(sleep_time)
-            next unless Narou::Worker.canceled?
-            next unless Narou::WebWorker.canceled?
-            Process.kill("KILL", pid)
-            Process.detach(pid)
+      stdout_str = ""
+      stderr_str = ""
+      status = nil
+      
+      opts = {}
+      opts[:chdir] = chdir if chdir
+
+      Open3.popen3(command, opts) do |stdin, stdout, stderr, wait_thr|
+        _pid = wait_thr.pid
+        stdin.close
+
+        # Output reading threads
+        out_t = Thread.new { stdout.read }
+        err_t = Thread.new { stderr.read }
+
+        # Monitoring loop
+        loop do
+          # Check if process finished
+          unless wait_thr.alive?
+            break
+          end
+
+          block.call if block
+          
+          # Use thread join with timeout as sleep
+          if wait_thr.join(sleep_time)
+            break
+          end
+
+          if Narou::Worker.canceled? || Narou::WebWorker.canceled?
+            process_kill(_pid)
             break
           end
         end
-        looper.join
-        looper = nil
+
+        stdout_str = out_t.value
+        stderr_str = err_t.value
+        status = wait_thr.value
       end
-      stdout.force_encoding(Encoding::UTF_8)
-      stderr.force_encoding(Encoding::UTF_8)
-      return [stdout, stderr, status]
-    rescue RuntimeError => e
-      raise unless e.message.include?("interrupted")
-      process_kill(_pid)
-      raise Interrupt
+
+      stdout_str.force_encoding(Encoding::UTF_8)
+      stderr_str.force_encoding(Encoding::UTF_8)
+      return [stdout_str, stderr_str, status]
     rescue Interrupt
       process_kill(_pid)
       raise
-    ensure
-      looper&.kill
     end
 
     def self.process_kill(pid)
