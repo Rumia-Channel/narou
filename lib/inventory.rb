@@ -63,7 +63,7 @@ module Inventory
     # メモリリークの原因となる。
     # また、Inventory は読み込んだハッシュを直接変更するため、CacheLoader が保持するハッシュも
     # 更新されてしまい、GC対象にならなくなる。
-    if ["section_convert_cache", "section_hash_cache", "database"].include?(name)
+    if ["section_convert_cache", "section_hash_cache"].include?(name)
       yaml = File.read(@inventory_file_path, mode: "r:BOM|UTF-8")
       begin
         self.merge!(YAML.unsafe_load(yaml))

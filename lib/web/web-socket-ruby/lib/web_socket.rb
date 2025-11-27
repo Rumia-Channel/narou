@@ -474,6 +474,7 @@ class WebSocketServer
     def run(&block)
       @run_threads = []
       loop do
+        @run_threads.delete_if { |t| !t.alive? } # Dead threads cleanup
         @run_threads << Thread.start(accept()) do |s|
           begin
             ws = create_web_socket(s)
