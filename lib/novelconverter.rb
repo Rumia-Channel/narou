@@ -539,19 +539,67 @@ class NovelConverter
     display_header
     initialize_event
 
-    if text
-      array_of_converted_text = convert_main_for_text(text)
-    else
-      array_of_converted_text = convert_main_for_novel
-      update_latest_convert_novel
-    end
-    inspect_novel(array_of_converted_text)
-
     array_of_output_path = []
-    array_of_converted_text.each_with_index do |converted_text, i|
-      output_path = create_output_path(text, converted_text, i + 1)
+
+    if text
+      # テキストファイル変換モード
+      converted_text = convert_main_for_text(text)
+      # inspect_novel は配列を受け取る仕様
+      inspect_novel([converted_text])
+      
+      output_path = create_output_path(text, converted_text, 1)
       File.write(output_path, converted_text)
       array_of_output_path.push(output_path)
+    else
+      # 小説変換モード
+      toc = Downloader.get_toc_data(@setting.archive_path)
+      subtitles = cut_subtitles(toc["subtitles"])
+      
+      # 分割処理
+      if @setting.slice_size > 0 && subtitles.length > @setting.slice_size
+        stream_io.puts "#{@setting.slice_size}話ごとに分割して変換します"
+        array_of_subtitles = subtitles.each_slice(@setting.slice_size).to_a
+      else
+        array_of_subtitles = [subtitles]
+      end
+
+      # あらすじ変換
+      toc["story"] = @converter.convert(toc["story"], "story")
+      
+      # 挿絵設定
+      site_setting = SiteSetting.find(toc["toc_url"])
+      html = HTML.new
+      html.strip_decoration_tag = @setting.enable_strip_decoration_tag
+      html.set_illust_setting(
+        current_url: site_setting["illust_current_url"],
+        grep_pattern: site_setting["illust_grep_pattern"]
+      )
+
+      # ループ内で変換・検査・書き出しを完結させることでメモリ消費を抑える
+      array_of_subtitles.each_with_index do |sliced_subtitles, index|
+        @converter.subtitles = sliced_subtitles
+        html.clear
+        sections = subtitles_to_sections(sliced_subtitles, html)
+        
+        converted_text = create_novel_text_by_template(
+          sections, toc, false, # is_hotentry は false 固定 (元のコード準拠)
+          array_of_subtitles.length == 1 ? nil : index + 1
+        )
+
+        # 検査
+        inspect_novel([converted_text])
+
+        # 書き出し
+        output_path = create_output_path(text, converted_text, index + 1)
+        File.write(output_path, converted_text)
+        array_of_output_path.push(output_path)
+        
+        # 明示的にGCを促す（巨大な文字列解放のため）
+        converted_text = nil
+        sections = nil
+      end
+      
+      update_latest_convert_novel
     end
 
     display_footer
@@ -884,68 +932,13 @@ class NovelConverter
 
     @use_dakuten_font = @converter.use_dakuten_font
 
-    [converted_text]
+    converted_text
   end
 
   #
-  # 管理小説変換時の実質的なメイン処理
+  # テキストファイル変換時の実質的なメイン処理
   #
-  # 引数 subtitles にデータを渡した場合はそれを直接使う
-  # is_hotentry を有効にすると出力されるテキストファイルにあらすじや作品タイトル等が含まれなくなる
-  # また、 is_hotentry を有効にすると分割も行われなくなる
-  #
-  def convert_main_for_novel(subtitles = nil, is_hotentry = false)
-    toc = Downloader.get_toc_data(@setting.archive_path)
-    unless subtitles
-      subtitles = cut_subtitles(toc["subtitles"])
-    end
-    if is_hotentry == false && @setting.slice_size > 0 && subtitles.length > @setting.slice_size
-      stream_io.puts "#{@setting.slice_size}話ごとに分割して変換します"
-      array_of_subtitles = subtitles.each_slice(@setting.slice_size).to_a
-    else
-      array_of_subtitles = [subtitles]
-    end
-    toc["story"] = @converter.convert(toc["story"], "story")
-    site_setting = SiteSetting.find(toc["toc_url"])
-    html = HTML.new
-    html.strip_decoration_tag = @setting.enable_strip_decoration_tag
-    html.set_illust_setting(
-      current_url: site_setting["illust_current_url"],
-      grep_pattern: site_setting["illust_grep_pattern"]
-    )
-    array_of_converted_text = []
-    array_of_subtitles.each_with_index do |sliced_subtitles, index|
-      @converter.subtitles = sliced_subtitles
-      html.clear
-      sections = subtitles_to_sections(sliced_subtitles, html)
-      array_of_converted_text.push(
-        create_novel_text_by_template(
-          sections, toc, is_hotentry,
-          array_of_subtitles.length == 1 ? nil : index + 1
-        )
-      )
-    end
-
-    if is_hotentry
-      array_of_converted_text[0]
-    else
-      array_of_converted_text
-    end
-  end
-
-  def cut_subtitles(subtitles)
-    case cut_size = @setting.cut_old_subtitles
-    when 0
-      result = subtitles
-    when 1...subtitles.size
-      stream_io.puts "#{cut_size}話分カットして変換します"
-      result = subtitles[cut_size..-1]
-    else
-      stream_io.puts "最新話のみ変換します"
-      result = [subtitles[-1]]
-    end
-    result
-  end
+  def convert_main_for_text(text)
 
   #
   # subtitle info から変換処理をする
