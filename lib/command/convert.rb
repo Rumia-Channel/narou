@@ -204,6 +204,7 @@ module Command
       total_count = argv.length
       completed_count = 0
       mutex = Mutex.new
+      ebook_queue = Helper::EbookConverterQueue.new
       
       $stdout2.puts "変換処理開始: #{total_count}件の小説を処理します"
       
@@ -225,7 +226,7 @@ module Command
           end
 
           Narou.lock(target) do
-            cmd.convert_novel_main(target, index)
+            cmd.convert_novel_main(target, index, ebook_queue)
           end
 
           mutex.synchronize do
@@ -243,13 +244,15 @@ module Command
         end
       end
       
+      ebook_queue.shutdown
       $stdout2.puts "変換処理完了: #{completed_count}/#{total_count}件が正常に変換されました"
     rescue Interrupt
+      ebook_queue.shutdown
       $stdout2.puts "変換を中断しました (#{completed_count}/#{total_count}件完了)"
       exit Narou::EXIT_INTERRUPT
     end
 
-    def convert_novel_main(target, index)
+    def convert_novel_main(target, index, ebook_queue)
       novel_data = nil
       device = @device
       output_filename = nil
@@ -298,20 +301,60 @@ module Command
       end
       return unless res
       array_of_converted_txt_path = res[:converted_txt_paths]
-      ebook_file = nil
-      array_of_converted_txt_path.each do |converted_txt_path|
-        use_dakuten_font = res[:use_dakuten_font]
+      
+      # EPUB/MOBI作成と送信処理をキューに追加
+      ebook_queue.push do
+        # スレッドセーフなインスタンス変数の設定（キュー実行時に行う）
+        @converted_txt_path = nil # 初期化
+        
+        array_of_converted_txt_path.each do |converted_txt_path|
+          use_dakuten_font = res[:use_dakuten_font]
 
-        ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
-        next if ebook_file.nil?
-        if ebook_file
-          copy_to_converted_file(ebook_file, device, novel_data, io: stream_io)
-          # ZIP専用のコピー先が設定されている場合、ZIPを追加コピー
-          copy_to_converted_zip_file(ebook_file, io: stream_io)
-          send_file_to_device(ebook_file, target, device, argument_target_type) unless using_send_command
+          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+          next if ebook_file.nil?
+          if ebook_file
+            copy_to_converted_file(ebook_file, device, novel_data, io: stream_io)
+            # ZIP専用のコピー先が設定されている場合、ZIPを追加コピー
+            copy_to_converted_zip_file(ebook_file, io: stream_io)
+            send_file_to_device(ebook_file, target, device, argument_target_type) unless using_send_command
+          end
+        end
+        # 最終的なファイル送信（using_send_commandの場合）はループ外で行うが、ebook_file変数がブロックローカルなので
+        # ここではループ内のロジックで完結させるか、ループ外で処理する必要がある。
+        # 元のロジックでは最後のebook_fileを使っていた。
+        # しかし、send_file_to_deviceは最後のファイルに対してのみ実行される仕様だったのか？
+        # 元コード:
+        # array_of_converted_txt_path.each do |converted_txt_path|
+        #   ...
+        #   ebook_file = ...
+        #   ...
+        #   send_file_to_device(...) unless using_send_command
+        # end
+        # send_file_to_device(ebook_file) if using_send_command && ebook_file
+        #
+        # キュー内では `ebook_file` の状態を追跡する必要がある。
+        
+        last_ebook_file = nil
+        array_of_converted_txt_path.each do |converted_txt_path|
+          use_dakuten_font = res[:use_dakuten_font]
+          
+          # フック呼び出し（内部で@converted_txt_path等をセット）
+          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+          
+          next if ebook_file.nil?
+          last_ebook_file = ebook_file
+          
+          if ebook_file
+            copy_to_converted_file(ebook_file, device, novel_data, io: stream_io)
+            copy_to_converted_zip_file(ebook_file, io: stream_io)
+            send_file_to_device(ebook_file, target, device, argument_target_type) unless using_send_command
+          end
+        end
+        
+        if using_send_command && last_ebook_file
+          send_file_to_device(last_ebook_file, target, device, argument_target_type)
         end
       end
-      send_file_to_device(ebook_file, target, device, argument_target_type) if using_send_command && ebook_file
 
       if @options["no-open"].! && Narou.web?.! && array_of_converted_txt_path&.first
         Helper.open_directory(File.dirname(array_of_converted_txt_path.first), "小説の保存フォルダを開きますか")
@@ -351,6 +394,12 @@ module Command
     # 変換された整形済みテキストファイルをデバイスに対応した書籍データに変換する
     #
     def convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+      # インスタンス変数に依存するメソッド（generate_ibunko_zip等）のために値をセット
+      @converted_txt_path = converted_txt_path
+      @novel_data = novel_data
+      @device = device
+      @argument_target_type = argument_target_type
+
       # dc:subject埋め込み設定の確認とタグ情報の取得
       dc_subjects = nil
       if @options["add-dc-subject-to-epub"] && novel_data && novel_data["tags"]

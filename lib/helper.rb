@@ -9,6 +9,7 @@ require "time"
 require "systemu"
 require "etc"
 require "thread"
+require_relative "helper/ebook_converter_queue"
 
 #
 # 雑多なお助けメソッド群

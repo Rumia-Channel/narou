@@ -6,6 +6,7 @@
 
 require "yaml"
 require "ostruct"
+require "monitor"
 require_relative "narou"
 
 #
@@ -53,7 +54,7 @@ module Inventory
             raise "Unknown scope"
           end
     return nil unless dir
-    @mutex = Mutex.new
+    @mutex = Monitor.new
     @inventory_file_path = File.join(dir, name + ".yaml")
     return unless File.exist?(@inventory_file_path)
     self.merge!(Helper::CacheLoader.memo(@inventory_file_path) { |yaml|
