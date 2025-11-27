@@ -16,28 +16,32 @@ require_relative "narou"
 # scope に :global を指定するとユーザーディレクトリ/.narousetting に保存される
 #
 module Inventory
+  @load_mutex = Mutex.new
+
   def self.load(name = "local_setting", scope = :local)
-    @@cache ||= {}
-    return @@cache[name] if @@cache[name]
-    
-    # キャッシュサイズ制限（メモリリーク対策）
-    # 重要な設定ファイルは保護、一時的なもののみ削除
-    if @@cache.size > 200  # 上限を大幅に引き上げ
-      protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
-      removable_keys = @@cache.keys - protected_keys
+    @load_mutex.synchronize do
+      @@cache ||= {}
+      return @@cache[name] if @@cache[name]
       
-      if removable_keys.any?
-        # 保護対象外の最も古いエントリを削除
-        oldest_removable = removable_keys.first
-        @@cache.delete(oldest_removable)
+      # キャッシュサイズ制限（メモリリーク対策）
+      # 重要な設定ファイルは保護、一時的なもののみ削除
+      if @@cache.size > 200  # 上限を大幅に引き上げ
+        protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
+        removable_keys = @@cache.keys - protected_keys
+        
+        if removable_keys.any?
+          # 保護対象外の最も古いエントリを削除
+          oldest_removable = removable_keys.first
+          @@cache.delete(oldest_removable)
+        end
       end
+      
+      {}.tap { |h|
+        h.extend(Inventory)
+        h.init(name, scope)
+        @@cache[name] = h
+      }
     end
-    
-    {}.tap { |h|
-      h.extend(Inventory)
-      h.init(name, scope)
-      @@cache[name] = h
-    }
   end
 
   def self.clear

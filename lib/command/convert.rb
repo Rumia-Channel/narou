@@ -229,6 +229,9 @@ module Command
             cmd.convert_novel_main(target, index, ebook_queue)
           end
 
+          # メモリリーク対策: 1つの小説の処理が終わるごとにGCを強制実行
+          GC.start
+
           mutex.synchronize do
             completed_count += 1
             $stdout2.puts "[#{index}/#{total_count}] 完了: #{target}"
