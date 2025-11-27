@@ -307,16 +307,19 @@ module Command
         # スレッドセーフなインスタンス変数の設定（キュー実行時に行う）
         @converted_txt_path = nil # 初期化
         
+        # Web UIの場合は$stdout2を使う（i文庫などの出力位置と合わせるため）
+        output_io = Narou.web? ? $stdout2 : stream_io
+
         array_of_converted_txt_path.each do |converted_txt_path|
           use_dakuten_font = res[:use_dakuten_font]
 
-          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
           next if ebook_file.nil?
           if ebook_file
-            copy_to_converted_file(ebook_file, device, novel_data, io: stream_io)
+            copy_to_converted_file(ebook_file, device, novel_data, io: output_io)
             # ZIP専用のコピー先が設定されている場合、ZIPを追加コピー
-            copy_to_converted_zip_file(ebook_file, io: stream_io)
-            send_file_to_device(ebook_file, target, device, argument_target_type) unless using_send_command
+            copy_to_converted_zip_file(ebook_file, io: output_io)
+            send_file_to_device(ebook_file, target, device, argument_target_type, io: output_io) unless using_send_command
           end
         end
         # 最終的なファイル送信（using_send_commandの場合）はループ外で行うが、ebook_file変数がブロックローカルなので
@@ -339,20 +342,20 @@ module Command
           use_dakuten_font = res[:use_dakuten_font]
           
           # フック呼び出し（内部で@converted_txt_path等をセット）
-          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
           
           next if ebook_file.nil?
           last_ebook_file = ebook_file
           
           if ebook_file
-            copy_to_converted_file(ebook_file, device, novel_data, io: stream_io)
-            copy_to_converted_zip_file(ebook_file, io: stream_io)
-            send_file_to_device(ebook_file, target, device, argument_target_type) unless using_send_command
+            copy_to_converted_file(ebook_file, device, novel_data, io: output_io)
+            copy_to_converted_zip_file(ebook_file, io: output_io)
+            send_file_to_device(ebook_file, target, device, argument_target_type, io: output_io) unless using_send_command
           end
         end
         
         if using_send_command && last_ebook_file
-          send_file_to_device(last_ebook_file, target, device, argument_target_type)
+          send_file_to_device(last_ebook_file, target, device, argument_target_type, io: output_io)
         end
       end
 
@@ -393,7 +396,8 @@ module Command
     #
     # 変換された整形済みテキストファイルをデバイスに対応した書籍データに変換する
     #
-    def convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type)
+    def convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, io = nil)
+      io ||= stream_io
       # インスタンス変数に依存するメソッド（generate_ibunko_zip等）のために値をセット
       @converted_txt_path = converted_txt_path
       @novel_data = novel_data
@@ -435,16 +439,16 @@ module Command
         no_cleanup_txt: no_cleanup_txt,
         yokogaki: @options["yokogaki"], # Note: This might be nil if not set in convert_novel_main for file target
         dc_subjects: dc_subjects,
-        stream_io: stream_io
+        stream_io: io
       })
       # その他の処理 -> EPUBタグ挿入処理(有効時) -> ZIP作成処理(有効時)
       # ZIP作成はEPUB生成の成否に依存させない（TXTから生成するため）
       if @options["make-zip"] && !@options["no-zip"]
         begin
-          zip_path = generate_ibunko_zip(device)
-          copy_to_converted_zip_file(zip_path, io: stream_io) if zip_path
+          zip_path = generate_ibunko_zip(device, io)
+          copy_to_converted_zip_file(zip_path, io: io) if zip_path
         rescue => e
-          $stdout2.error "ZIP生成に失敗しました: #{e.message}"
+          io.error "ZIP生成に失敗しました: #{e.message}"
         end
       end
       ebook_path
@@ -453,7 +457,7 @@ module Command
     #
     # i文庫用ZIP生成を明示的に実行する
     #
-    def generate_ibunko_zip(device)
+    def generate_ibunko_zip(device, io)
       # prev_device = @device # Don't touch instance var
       # ibunko_device = Narou.get_device("ibunko")
       # @device = ibunko_device # Don't touch instance var
