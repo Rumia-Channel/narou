@@ -364,7 +364,7 @@ class Downloader
   end
 
   def self.section_hash_cache
-    @section_hash_cache ||= Inventory.load(SECTION_HASH_CACHE_NAME)
+    Inventory.load(SECTION_HASH_CACHE_NAME)
   end
 
   def self.clear_section_hash_cache(id)

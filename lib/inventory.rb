@@ -23,7 +23,7 @@ module Inventory
     # キャッシュサイズ制限（メモリリーク対策）
     # 重要な設定ファイルは保護、一時的なもののみ削除
     if @@cache.size > 200  # 上限を大幅に引き上げ
-      protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
+      protected_keys = ["local_setting", "database", "global_setting", "latest_convert", "section_convert_cache", "section_hash_cache"]
       removable_keys = @@cache.keys - protected_keys
       
       if removable_keys.any?

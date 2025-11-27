@@ -54,7 +54,7 @@ class NovelConverter
   end
 
   def self.section_convert_cache
-    @section_convert_cache ||= Inventory.load(SECTION_CONVERT_CACHE_NAME)
+    Inventory.load(SECTION_CONVERT_CACHE_NAME)
   end
 
   def self.clear_section_convert_cache(id)
