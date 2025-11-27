@@ -58,17 +58,19 @@ class NovelConverter
   end
 
   def self.clear_section_convert_cache(id)
-    cache = section_convert_cache
-    removed = cache.delete(id.to_s)
-    cache.save if removed
+    section_convert_cache.synchronize do |cache|
+      removed = cache.delete(id.to_s)
+      cache.save if removed
+    end
   end
 
   def self.clear_section_convert_cache_entry(id, relative_path)
-    cache = section_convert_cache
-    bucket = cache[id.to_s]
-    return unless bucket&.delete(relative_path)
-    cache.delete(id.to_s) if bucket.empty?
-    cache.save
+    section_convert_cache.synchronize do |cache|
+      bucket = cache[id.to_s]
+      return unless bucket&.delete(relative_path)
+      cache.delete(id.to_s) if bucket.empty?
+      cache.save
+    end
   end
 
   #
@@ -645,11 +647,13 @@ class NovelConverter
       "section" => deep_clone(section),
       "use_dakuten_font" => !!use_dakuten_font
     }
-    bucket = section_convert_bucket
-    changed = bucket[relative_path] != payload
-    if changed
-      bucket[relative_path] = payload
-      mark_conversion_cache_dirty
+    self.class.section_convert_cache.synchronize do |cache|
+      bucket = section_convert_bucket
+      changed = bucket[relative_path] != payload
+      if changed
+        bucket[relative_path] = payload
+        mark_conversion_cache_dirty
+      end
     end
   end
 
@@ -660,7 +664,9 @@ class NovelConverter
   def flush_conversion_cache
     return unless caching_available?
     return unless @conversion_cache_dirty
-    self.class.section_convert_cache.save
+    self.class.section_convert_cache.synchronize do |cache|
+      cache.save
+    end
     @conversion_cache_dirty = false
   end
 
@@ -1081,9 +1087,9 @@ class NovelConverter
   #
   def update_latest_convert_novel
     id = Downloader.get_id_by_target(@novel_title)
-    Inventory.load("latest_convert").tap { |inv|
+    Inventory.load("latest_convert").synchronize do |inv|
       inv["id"] = id
       inv.save
-    }
+    end
   end
 end

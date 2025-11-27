@@ -24,9 +24,9 @@ Gem::Specification.new do |gem|
       gem.platform  = Gem::Platform::CURRENT
   end
   gem.license       = "MIT"
-  gem.authors       = ["whiteleaf7 (original)", "Rumia-Channel (fork from)", "ponponusa (mod maintainer)"]
-  gem.email         = ["2nd.leaf@gmail.com"]
-  gem.homepage      = "https://github.com/ponponusa/narou"
+  gem.authors       = ["whiteleaf7 (original)", "Rumia-Channel (maintainer)", "ponponusa (fork from)"]
+  gem.email         = ["github@rumia-ch.uk"]
+  gem.homepage      = "https://github.com/Rumia-Channel/narou"
   gem.summary       = "Narou.rb ― 小説家になろうダウンローダ＆縦書用整形スクリプト"
   gem.description   = "小説家になろうで公開されている小説を管理し電子書籍データへ変換します。"
   install_message   = <<~MSG
@@ -36,7 +36,7 @@ Gem::Specification.new do |gem|
      コマンドヘルプ:   narou help
      Webサーバー起動:  narou web
 
-     更新情報: https://github.com/ponponusa/narou/releases
+     更新情報: https://github.com/Rumia-Channel/narou/releases
     ============================================================
   MSG
   gem.post_install_message = install_message.gsub("\t", "  ")
