@@ -569,7 +569,8 @@ class NovelConverter
     progressbar = nil
 
     on(:"convert_main.init") do |subtitles|
-      progressbar = ProgressBar.new(subtitles.size, io: stream_io)
+      topic = @novel_id ? "ID:#{@novel_id}" : @novel_title
+      progressbar = ProgressBar.new(subtitles.size, io: stream_io, topic: topic)
     end
 
     on(:"convert_main.loop") do |i|
