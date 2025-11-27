@@ -23,7 +23,7 @@ module Inventory
     # キャッシュサイズ制限（メモリリーク対策）
     # 重要な設定ファイルは保護、一時的なもののみ削除
     if @@cache.size > 200  # 上限を大幅に引き上げ
-      protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
+      protected_keys = ["local_setting", "database", "global_setting", "latest_convert", "section_convert_cache", "section_hash_cache"]
       removable_keys = @@cache.keys - protected_keys
       
       if removable_keys.any?
@@ -80,9 +80,42 @@ module Inventory
       raise "not initialized setting dir yet"
     end
     @mutex.synchronize do
-      File.write(@inventory_file_path, YAML.dump(self))
+      atomic_write(@inventory_file_path, YAML.dump(self))
     end
   end
+
+  private
+
+  def atomic_write(file_path, content)
+    temp_file_path = "#{file_path}.#{Process.pid}.#{rand(100000)}.tmp"
+    File.write(temp_file_path, content)
+
+    # Windowsでのファイルロック対策のためのリトライループ
+    # ウイルス対策ソフトやインデックスサービスが一時的にロックする場合があるため
+    20.times do |i|
+      begin
+        File.rename(temp_file_path, file_path)
+        return
+      rescue Errno::EACCES, Errno::EEXIST, Errno::EBUSY
+        # ロックされている場合は少し待ってリトライ
+        sleep 0.1 + (i * 0.05)
+      end
+    end
+    
+    # 最後に一度だけリトライなしで実行（エラーを発生させるため）
+    File.rename(temp_file_path, file_path)
+  ensure
+    # テンポラリファイルが残っていたら削除
+    if File.exist?(temp_file_path)
+      begin
+        File.delete(temp_file_path)
+      rescue Errno::EACCES, Errno::EBUSY
+        # 削除に失敗しても無視（次回の掃除などで消えることを期待）
+      end
+    end
+  end
+
+  public
 
   def synchronize
     @mutex.synchronize do
