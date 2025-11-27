@@ -18,6 +18,7 @@ require "rack/protection"
 require "tilt/erubi"
 require "tilt/haml"
 require "tilt/sass"
+require "etc"
 require_relative "../commandline"
 require_relative "../inventory"
 require_relative "web_worker"
@@ -46,7 +47,7 @@ class Narou::AppServer < Sinatra::Base
 
     set :environment, :production unless $development
     set :server, :puma
-    set :server_settings, { Silent: true }
+    set :server_settings, { Silent: true, Threads: "0:#{Etc.nprocessors * 2}" }
 
     if $debug
       use BetterErrors::Middleware

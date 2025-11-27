@@ -7,12 +7,67 @@
 require "open3"
 require "time"
 require "systemu"
+require "etc"
+require "thread"
 
 #
 # 雑多なお助けメソッド群
 #
 module Helper
   module_function
+
+  class ThreadPool
+    def initialize(size = nil)
+      @size = size || (Etc.nprocessors rescue 4)
+      @jobs = Queue.new
+      @pool = Array.new(@size) do
+        Thread.new do
+          catch(:exit) do
+            loop do
+              job, args = @jobs.pop
+              job.call(*args)
+            end
+          end
+        end
+      end
+    end
+
+    def process(enumerable, &block)
+      wg = ThreadGroup.new
+      count = 0
+      mutex = Mutex.new
+      cond = ConditionVariable.new
+
+      enumerable.each do |item|
+        mutex.synchronize do
+          count += 1
+        end
+        @jobs.push [proc { |*args|
+          begin
+            block.call(*args)
+          ensure
+            mutex.synchronize do
+              count -= 1
+              cond.signal if count == 0
+            end
+          end
+        }, [item]]
+      end
+
+      mutex.synchronize do
+        while count > 0
+          cond.wait(mutex)
+        end
+      end
+    end
+
+    def shutdown
+      @size.times do
+        @jobs.push [proc { throw :exit }, []]
+      end
+      @pool.each(&:join)
+    end
+  end
 
   HOST_OS = RbConfig::CONFIG["host_os"]
   FILENAME_LENGTH_LIMIT = 50

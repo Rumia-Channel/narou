@@ -83,6 +83,12 @@ module Inventory
     end
   end
 
+  def synchronize
+    @mutex.synchronize do
+      yield self
+    end
+  end
+
   def restore(path)
     backup_path = "#{path}.backup"
     return nil unless File.exist?(backup_path)
