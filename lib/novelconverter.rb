@@ -917,6 +917,20 @@ class NovelConverter
     output_path
   end
 
+  def cut_subtitles(subtitles)
+    case cut_size = @setting.cut_old_subtitles
+    when 0
+      result = subtitles
+    when 1...subtitles.size
+      stream_io.puts "#{cut_size}話分カットして変換します"
+      result = subtitles[cut_size..-1]
+    else
+      stream_io.puts "最新話のみ変換します"
+      result = [subtitles[-1]]
+    end
+    result
+  end
+
   #
   # テキストファイル変換時の実質的なメイン処理
   #
@@ -934,11 +948,6 @@ class NovelConverter
 
     converted_text
   end
-
-  #
-  # テキストファイル変換時の実質的なメイン処理
-  #
-  def convert_main_for_text(text)
 
   #
   # subtitle info から変換処理をする
