@@ -1318,3 +1318,65 @@ $console-color: white;
     box-shadow: 0 0 12px rgba(245,197,24,0.9);
   }
 }
+
+/*
+ * Touch Device Optimizations
+ */
+body.touch-device {
+  /* Increase table cell padding for easier touching */
+  table#novel-list td {
+    padding: 10px 6px !important;
+  }
+
+  /* Increase button hit area */
+  .btn {
+    margin-bottom: 4px;
+    /* Ensure buttons are easy to tap */
+    min-height: 34px; 
+    padding-top: 6px;
+  }
+
+  /* Table buttons (Download, Folder, etc.) */
+  table#novel-list .btn-xs {
+    padding: 6px 12px;
+    font-size: 14px;
+    min-height: auto; /* Reset for small buttons, but padding makes them big enough */
+  }
+  
+  /* Dropdown menus */
+  .dropdown-menu > li > a {
+    padding: 12px 20px;
+    font-size: 16px;
+  }
+  
+  /* Navbar links */
+  .navbar-nav > li > a {
+    padding-top: 15px;
+    padding-bottom: 15px;
+  }
+
+  /* Console text */
+  .console {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Settings inputs */
+  .panel-settings input, 
+  .panel-settings .input-style {
+    height: 40px;
+    font-size: 16px;
+  }
+  
+  /* Increase size of checkboxes/radios in menus */
+  input[type="checkbox"], input[type="radio"] {
+    transform: scale(1.3);
+    margin-right: 5px;
+  }
+  
+  /* Context menu customization */
+  .context-menu-list .context-menu-item {
+    padding: 10px 10px;
+    font-size: 16px;
+  }
+}
