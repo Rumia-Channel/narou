@@ -316,33 +316,6 @@ module Command
         # Web UIの場合は$stdout2を使う（i文庫などの出力位置と合わせるため）
         output_io = Narou.web? ? $stdout2 : stream_io
 
-        array_of_converted_txt_path.each do |converted_txt_path|
-          use_dakuten_font = res[:use_dakuten_font]
-
-          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
-          next if ebook_file.nil?
-          if ebook_file
-            copy_to_converted_file(ebook_file, device, novel_data, io: output_io)
-            # ZIP専用のコピー先が設定されている場合、ZIPを追加コピー
-            copy_to_converted_zip_file(ebook_file, io: output_io)
-            send_file_to_device(ebook_file, target, device, argument_target_type, io: output_io) unless using_send_command
-          end
-        end
-        # 最終的なファイル送信（using_send_commandの場合）はループ外で行うが、ebook_file変数がブロックローカルなので
-        # ここではループ内のロジックで完結させるか、ループ外で処理する必要がある。
-        # 元のロジックでは最後のebook_fileを使っていた。
-        # しかし、send_file_to_deviceは最後のファイルに対してのみ実行される仕様だったのか？
-        # 元コード:
-        # array_of_converted_txt_path.each do |converted_txt_path|
-        #   ...
-        #   ebook_file = ...
-        #   ...
-        #   send_file_to_device(...) unless using_send_command
-        # end
-        # send_file_to_device(ebook_file) if using_send_command && ebook_file
-        #
-        # キュー内では `ebook_file` の状態を追跡する必要がある。
-        
         last_ebook_file = nil
         array_of_converted_txt_path.each do |converted_txt_path|
           use_dakuten_font = res[:use_dakuten_font]
@@ -544,10 +517,10 @@ module Command
 
       dirs = [copy_to_dir]
       gvalues = grouping_values
-      if gvalues.device && device
+      if gvalues.device && device && device.display_name
         dirs << device.display_name
       end
-      if gvalues.site && novel_data
+      if gvalues.site && novel_data && novel_data["sitename"]
         dirs << novel_data["sitename"]
       end
       copy_to_dir_with_groups = File.join(dirs)
