@@ -298,7 +298,7 @@ module Narou::ServerHelpers
 
   def concurrency_push(&block)
     if Narou.concurrency_enabled?
-      yield
+      Narou.concurrency_call(&block)
     else
       Narou::WebWorker.push(&block)
     end
