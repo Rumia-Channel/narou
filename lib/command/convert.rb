@@ -170,6 +170,9 @@ module Command
     end
 
     def build_device_names
+      if @options["make-zip"]
+        return ["ibunko"]
+      end
       multi_device = @options["multi-device"]
       device_names = if multi_device
                        multi_device.split(",").map(&:strip).map(&:downcase).select do |name|
@@ -347,7 +350,17 @@ module Command
           # i文庫(ibunko)の場合、フック内で元のメソッド(EPUB生成)が呼ばれない仕様のため、
           # ここで明示的に呼び出してEPUBを生成しておく(Web UIからのダウンロード等のため)
           if device && device.ibunko?
-             convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
+             NovelConverter.convert_txt_to_ebook_file(converted_txt_path, {
+               use_dakuten_font: use_dakuten_font,
+               device: device,
+               verbose: @options["verbose"],
+               no_epub: false,
+               no_mobi: true,
+               no_strip: true,
+               no_cleanup_txt: true,
+               yokogaki: @options["yokogaki"],
+               stream_io: output_io
+             })
           end
 
           # フック呼び出し（内部で@converted_txt_path等をセット）
