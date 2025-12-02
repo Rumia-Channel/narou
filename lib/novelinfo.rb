@@ -57,7 +57,8 @@ class NovelInfo
     @setting.multi_match(info_source, *request_output_parameters)
     result["last_load_time"] = Time.now
     result["title"] = @setting["title"]
-    novel_status = @setting["novel_type_string"][@setting["novel_type"]] || 1
+    novel_type_string = @setting["novel_type_string"] || {}
+    novel_status = novel_type_string[@setting["novel_type"]] || 1
     result["end"] = novel_status == 3
     result["novel_type"] = case novel_status
                            when 1, 3   # 連載

@@ -18,8 +18,17 @@ module Helper
   module_function
 
   class ThreadPool
-    def initialize(size = nil)
-      @size = size || (Etc.nprocessors rescue 4)
+    DEFAULT_FALLBACK = 4
+    LINUX_THREAD_LIMIT = 8
+    LINUX_WEB_THREAD_LIMIT = 2
+    LINUX_LOW_MEMORY_THRESHOLD_MB = 8 * 1024
+    LINUX_LOW_MEMORY_POOL_SIZE = 1
+    THREAD_ENV_KEY = "NAROU_THREAD_POOL_SIZE"
+    CGROUP_MEMORY_UNLIMITED = 9_000_000_000_000_000
+
+    def initialize(size = nil, auto_shutdown: true)
+      @size = determine_pool_size(size)
+      @auto_shutdown = auto_shutdown
       @jobs = Queue.new
       @pool = Array.new(@size) do
         Thread.new do
@@ -60,13 +69,108 @@ module Helper
           cond.wait(mutex)
         end
       end
+    ensure
+      shutdown if @auto_shutdown
     end
 
     def shutdown
+      return if @pool.nil?
       @size.times do
         @jobs.push [proc { throw :exit }, []]
       end
       @pool.each(&:join)
+      @pool = nil
+    end
+
+    private
+
+    def determine_pool_size(size)
+      explicit = normalize_size(size) || env_pool_size || default_pool_size
+      [explicit, 1].max
+    end
+
+    def env_pool_size
+      env = ENV[THREAD_ENV_KEY]
+      normalize_size(env)
+    end
+
+    def normalize_size(value)
+      return unless value
+      number = value.to_i
+      number.positive? ? number : nil
+    end
+
+    # Linux Ruby allocates ~8MB stack per thread, so cap workers to avoid
+    # ballooning memory and runaway CPU usage on large hosts.
+    def default_pool_size
+      processors = (Etc.nprocessors rescue DEFAULT_FALLBACK)
+      processors = DEFAULT_FALLBACK if processors.nil? || processors <= 0
+      return processors if windows_like_platform?
+
+      limit = [processors, LINUX_THREAD_LIMIT].min
+      linux_web_limit = web_thread_limit
+      limit = [limit, linux_web_limit].min if linux_web_limit
+
+      low_memory_limit = linux_memory_limit
+      limit = [limit, low_memory_limit].min if low_memory_limit
+
+      [limit, 1].max
+    end
+
+    def windows_like_platform?
+      Helper.os_windows? || Helper.os_mac? || Helper.os_cygwin?
+    end
+
+    def web_thread_limit
+      return nil unless defined?(Narou) && Narou.respond_to?(:web?) && Narou.web?
+      LINUX_WEB_THREAD_LIMIT
+    end
+
+    def linux_memory_limit
+      total_mb = linux_memory_total_mb
+      return nil unless total_mb
+      if total_mb <= LINUX_LOW_MEMORY_THRESHOLD_MB
+        [LINUX_LOW_MEMORY_POOL_SIZE, 1].max
+      else
+        nil
+      end
+    end
+
+    def linux_memory_total_mb
+      cgroup_limit = read_cgroup_memory_limit_mb
+      return cgroup_limit if cgroup_limit
+      read_meminfo_total_mb
+    end
+
+    def read_cgroup_memory_limit_mb
+      paths = [
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        "/sys/fs/cgroup/memory.max"
+      ]
+      paths.each do |path|
+        next unless File.file?(path)
+        content = File.read(path).strip
+        next if content.empty? || content == "max"
+        value = content.to_i
+        next if value <= 0 || value >= CGROUP_MEMORY_UNLIMITED
+        return value / (1024 * 1024)
+      end
+      nil
+    rescue StandardError
+      nil
+    end
+
+    def read_meminfo_total_mb
+      meminfo = "/proc/meminfo"
+      return nil unless File.readable?(meminfo)
+      File.foreach(meminfo) do |line|
+        next unless line.start_with?("MemTotal:")
+        parts = line.split
+        return parts[1].to_i / 1024 if parts[1]
+      end
+      nil
+    rescue StandardError
+      nil
     end
   end
 

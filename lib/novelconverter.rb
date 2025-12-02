@@ -571,8 +571,8 @@ class NovelConverter
       html = HTML.new
       html.strip_decoration_tag = @setting.enable_strip_decoration_tag
       html.set_illust_setting(
-        current_url: site_setting["illust_current_url"],
-        grep_pattern: site_setting["illust_grep_pattern"]
+        current_url: site_setting&.[]("illust_current_url"),
+        grep_pattern: site_setting&.[]("illust_grep_pattern")
       )
 
       # ループ内で変換・検査・書き出しを完結させることでメモリ消費を抑える
