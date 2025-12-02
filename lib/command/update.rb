@@ -170,17 +170,23 @@ module Command
             mistook_count += 1
             next
           end
-          interval.wait
-          downloader = Downloader.new(target)
-          hotentry_manager.connect(downloader)
+          begin
+            interval.wait
+            downloader = Downloader.new(target)
+            hotentry_manager.connect(downloader)
 
-          delete_modified_tag = -> do
-            tags = data["tags"] || []
-            data["tags"] = tags - [Narou::MODIFIED_TAG] if tags.include?(Narou::MODIFIED_TAG)
-            data["last_check_date"] = Time.now
+            delete_modified_tag = -> do
+              tags = data["tags"] || []
+              data["tags"] = tags - [Narou::MODIFIED_TAG] if tags.include?(Narou::MODIFIED_TAG)
+              data["last_check_date"] = Time.now
+            end
+
+            result = downloader.start_download
+          rescue Downloader::InvalidTarget => e
+            puts "<bold><red>[ERROR]</red></bold> #{e.message}".termcolor
+            mistook_count += 1
+            next
           end
-
-          result = downloader.start_download
           case result.status
           when :ok
             delete_modified_tag.call
