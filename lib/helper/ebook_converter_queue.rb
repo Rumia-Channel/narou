@@ -10,6 +10,7 @@ module Helper
             task.call
           rescue => e
             $stdout2.error "Ebook変換キューでエラーが発生しました: #{e.message}"
+            $stdout2.warn e.backtrace.join("\n")
           ensure
             # メモリ解放のためのGC（任意）
             GC.start
