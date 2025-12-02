@@ -348,8 +348,8 @@ module Command
           use_dakuten_font = res[:use_dakuten_font]
           
           # i文庫(ibunko)の場合、フック内で元のメソッド(EPUB生成)が呼ばれない仕様のため、
-          # ここで明示的に呼び出してEPUBを生成しておく(Web UIからのダウンロード等のため)
-          if device && device.ibunko?
+          # 設定でEPUB生成が無効化されていなければ、ここで明示的に呼び出してEPUBを生成しておく
+          if device && device.ibunko? && !@options["no-epub"]
              NovelConverter.convert_txt_to_ebook_file(converted_txt_path, {
                use_dakuten_font: use_dakuten_font,
                device: device,
