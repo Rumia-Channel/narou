@@ -89,7 +89,7 @@ module Device::Ibunko
   #
   # i文庫用にテキストと挿絵ファイルをzipアーカイブ化する
   #
-  def hook_convert_txt_to_ebook_file(*_args, *_args, &original_func)
+  def hook_convert_txt_to_ebook_file(*_args, &original_func)
     @converted_txt_path = _args[0]
     @novel_data = _args[2]
     @device = _args[3]
