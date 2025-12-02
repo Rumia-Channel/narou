@@ -344,6 +344,12 @@ module Command
         array_of_converted_txt_path.each do |converted_txt_path|
           use_dakuten_font = res[:use_dakuten_font]
           
+          # i文庫(ibunko)の場合、フック内で元のメソッド(EPUB生成)が呼ばれない仕様のため、
+          # ここで明示的に呼び出してEPUBを生成しておく(Web UIからのダウンロード等のため)
+          if device && device.ibunko?
+             convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
+          end
+
           # フック呼び出し（内部で@converted_txt_path等をセット）
           ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
           
