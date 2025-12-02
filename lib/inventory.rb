@@ -48,6 +48,13 @@ module Inventory
     @@cache = {}
   end
 
+  def self.unload(name)
+    @load_mutex.synchronize do
+      return unless defined?(@@cache) && @@cache
+      @@cache.delete(name)
+    end
+  end
+
   def init(name, scope)
     dir = case scope
           when :local

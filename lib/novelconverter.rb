@@ -42,6 +42,7 @@ class NovelConverter
   attr_reader :use_dakuten_font, :stream_io
 
   SECTION_CONVERT_CACHE_NAME = "section_convert_cache"
+  SECTION_CONVERT_CACHE_STORE = "section_convert_sections"
 
   def self.extensions_of_converted_files(device)
     exts = [".txt"]
@@ -60,15 +61,24 @@ class NovelConverter
   def self.clear_section_convert_cache(id)
     section_convert_cache.synchronize do |cache|
       removed = cache.delete(id.to_s)
-      cache.save if removed
+      if removed
+        delete_section_cache_bucket(id)
+        cache.save
+      end
     end
   end
 
   def self.clear_section_convert_cache_entry(id, relative_path)
     section_convert_cache.synchronize do |cache|
       bucket = cache[id.to_s]
-      return unless bucket&.delete(relative_path)
-      cache.delete(id.to_s) if bucket.empty?
+      return unless bucket
+      entry = bucket.delete(relative_path)
+      return unless entry
+      delete_section_cache_path(entry["section_path"])
+      if bucket.empty?
+        cache.delete(id.to_s)
+        delete_section_cache_bucket(id)
+      end
       cache.save
     end
   end
@@ -648,6 +658,43 @@ class NovelConverter
     cache[@novel_id.to_s] ||= {}
   end
 
+  def self.section_cache_storage_root
+    Narou.misc_dir&.join(SECTION_CONVERT_CACHE_STORE)
+  end
+
+  def self.ensure_section_cache_storage_root
+    root = section_cache_storage_root
+    return nil unless root
+    FileUtils.mkdir_p(root)
+    root
+  rescue SystemCallError
+    nil
+  end
+
+  def self.section_cache_bucket_dir(novel_id, ensure_dir: true)
+    return nil unless novel_id
+    root = ensure_section_cache_storage_root
+    return nil unless root
+    dir = root.join(novel_id.to_s)
+    FileUtils.mkdir_p(dir) if ensure_dir
+    dir
+  rescue SystemCallError
+    nil
+  end
+
+  def self.delete_section_cache_bucket(novel_id)
+    dir = section_cache_bucket_dir(novel_id, ensure_dir: false)
+    return unless dir
+    FileUtils.rm_rf(dir)
+  rescue SystemCallError
+  end
+
+  def self.delete_section_cache_path(path)
+    return unless path
+    FileUtils.rm_f(path)
+  rescue SystemCallError
+  end
+
   def conversion_context_signature
     @conversion_context_signature ||= begin
       setting_signature = Digest::SHA256.hexdigest(Marshal.dump(@setting.settings))
@@ -680,22 +727,36 @@ class NovelConverter
     return nil unless cached
     return nil unless cached["digest"] == digest
     return nil unless cached["signature"] == conversion_context_signature
+
+    section_data = load_section_cache_entry(relative_path, cached)
+    return nil unless section_data
+
     {
-      section: deep_clone(cached["section"]),
+      section: deep_clone(section_data),
       use_dakuten_font: cached["use_dakuten_font"] ? true : false
     }
   end
 
   def store_cached_section(relative_path, digest, section, use_dakuten_font)
     return unless caching_available?
+    cloned_section = deep_clone(section)
     payload = {
       "digest" => digest,
       "signature" => conversion_context_signature,
-      "section" => deep_clone(section),
       "use_dakuten_font" => !!use_dakuten_font
     }
-    self.class.section_convert_cache.synchronize do |cache|
+
+    section_path = write_section_cache(relative_path, cloned_section)
+    if section_path
+      payload["section_path"] = section_path
+    else
+      payload["section"] = cloned_section
+    end
+
+    self.class.section_convert_cache.synchronize do
       bucket = section_convert_bucket
+      previous = bucket[relative_path]
+      cleanup_section_cache_entry(previous)
       changed = bucket[relative_path] != payload
       if changed
         bucket[relative_path] = payload
@@ -720,12 +781,64 @@ class NovelConverter
   def clear_cached_section(relative_path)
     return unless caching_available?
     bucket = section_convert_bucket
-    changed = bucket.delete(relative_path)
-    mark_conversion_cache_dirty if changed
+    entry = bucket.delete(relative_path)
+    cleanup_section_cache_entry(entry)
+    mark_conversion_cache_dirty if entry
   end
 
   def deep_clone(object)
     Marshal.load(Marshal.dump(object))
+  end
+
+  def write_section_cache(relative_path, section)
+    return nil unless caching_available?
+    path = self.class.section_cache_bucket_dir(@novel_id)&.join("#{Digest::SHA256.hexdigest(relative_path)}.bin")
+    return nil unless path
+    File.binwrite(path, Marshal.dump(section))
+    path.to_s
+  rescue SystemCallError
+    nil
+  end
+
+  def load_section_cache_entry(relative_path, cached)
+    if cached["section_path"]
+      read_section_cache(cached["section_path"])
+    elsif cached["section"]
+      migrate_cached_section(relative_path, cached)
+    else
+      nil
+    end
+  end
+
+  def read_section_cache(path)
+    return nil unless path
+    data = File.binread(path)
+    Marshal.load(data)
+  rescue StandardError
+    nil
+  end
+
+  def migrate_cached_section(relative_path, cached)
+    section = cached["section"]
+    section_path = write_section_cache(relative_path, section)
+    return section unless section_path
+    self.class.section_convert_cache.synchronize do
+      bucket = section_convert_bucket
+      entry = bucket[relative_path]
+      if entry
+        updated = entry.dup
+        updated.delete("section")
+        updated["section_path"] = section_path
+        bucket[relative_path] = updated
+        mark_conversion_cache_dirty
+      end
+    end
+    section
+  end
+
+  def cleanup_section_cache_entry(entry)
+    return unless entry
+    self.class.delete_section_cache_path(entry["section_path"])
   end
 
   def load_novel_section(subtitle_info, section_save_dir)
