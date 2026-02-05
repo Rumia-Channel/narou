@@ -47,3 +47,9 @@
   color: white !important;
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Cerulean theme) */
+.dt-button-collection button:hover {
+  background-color: #e6f2f8 !important;
+  color: #333 !important;
+}

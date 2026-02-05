@@ -51,3 +51,9 @@ body {
   color: white !important;
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Readable theme) */
+.dt-button-collection button:hover {
+  background-color: #e8f0fe !important;
+  color: #333 !important;
+}
