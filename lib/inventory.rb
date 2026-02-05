@@ -18,42 +18,82 @@ require_relative "narou"
 module Inventory
   @load_mutex = Mutex.new
 
+  # LRU (Least Recently Used) キャッシュ実装のためのアクセス順序追跡
+  CACHE_MAX_SIZE = 200
+  CACHE_TARGET_SIZE = 160  # 削除時の目標サイズ（80%）
+
   def self.load(name = "local_setting", scope = :local)
     @load_mutex.synchronize do
       @@cache ||= {}
-      return @@cache[name] if @@cache[name]
-      
-      # キャッシュサイズ制限（メモリリーク対策）
-      # 重要な設定ファイルは保護、一時的なもののみ削除
-      if @@cache.size > 200  # 上限を大幅に引き上げ
-        protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
-        removable_keys = @@cache.keys - protected_keys
-        
-        if removable_keys.any?
-          # 保護対象外の最も古いエントリを削除
-          oldest_removable = removable_keys.first
-          @@cache.delete(oldest_removable)
-        end
+      @@cache_access_order ||= []
+
+      # キャッシュヒット時はアクセス順を更新
+      if @@cache[name]
+        update_access_order(name)
+        return @@cache[name]
       end
-      
+
+      # キャッシュサイズ制限（メモリリーク対策）
+      # LRUアルゴリズムで最も古くアクセスされたエントリから削除
+      if @@cache.size >= CACHE_MAX_SIZE
+        cleanup_cache
+      end
+
       {}.tap { |h|
         h.extend(Inventory)
         h.init(name, scope)
         @@cache[name] = h
+        update_access_order(name)
       }
     end
   end
 
   def self.clear
     @@cache = {}
+    @@cache_access_order = []
   end
 
   def self.unload(name)
     @load_mutex.synchronize do
       return unless defined?(@@cache) && @@cache
       @@cache.delete(name)
+      @@cache_access_order ||= []
+      @@cache_access_order.delete(name)
     end
   end
+
+  private
+
+  # アクセス順序を更新（LRU実装）
+  def self.update_access_order(name)
+    @@cache_access_order.delete(name)
+    @@cache_access_order.push(name)
+  end
+
+  # キャッシュのクリーンアップ（LRUアルゴリズム）
+  def self.cleanup_cache
+    # 重要な設定ファイルは保護
+    protected_keys = ["local_setting", "database", "global_setting", "latest_convert", "database_index"]
+
+    # 削除対象のエントリ数を計算
+    entries_to_remove = @@cache.size - CACHE_TARGET_SIZE
+    return if entries_to_remove <= 0
+
+    removed_count = 0
+    # 最も古くアクセスされたエントリから削除
+    @@cache_access_order.dup.each do |name|
+      break if removed_count >= entries_to_remove
+
+      # 保護対象はスキップ
+      next if protected_keys.include?(name)
+
+      @@cache.delete(name)
+      @@cache_access_order.delete(name)
+      removed_count += 1
+    end
+  end
+
+  public
 
   def init(name, scope)
     dir = case scope
