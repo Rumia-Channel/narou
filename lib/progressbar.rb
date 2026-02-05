@@ -7,15 +7,16 @@
 class ProgressBar
   class OverRangeError < StandardError; end
 
-  attr_reader :io
+  attr_reader :io, :topic
 
-  def initialize(max, interval = 1, width = 50, char = "*", io: $stdout)
+  def initialize(max, interval = 1, width = 50, char = "*", io: $stdout, topic: nil)
     @max = max == 0 ? 1.0 : max.to_f
     @interval = interval
     @width = width
     @char = char
     @counter = 0
     @io = io
+    @topic = topic
   end
 
   def output(num)

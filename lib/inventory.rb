@@ -6,6 +6,7 @@
 
 require "yaml"
 require "ostruct"
+require "monitor"
 require_relative "narou"
 
 #
@@ -15,33 +16,84 @@ require_relative "narou"
 # scope に :global を指定するとユーザーディレクトリ/.narousetting に保存される
 #
 module Inventory
+  @load_mutex = Mutex.new
+
+  # LRU (Least Recently Used) キャッシュ実装のためのアクセス順序追跡
+  CACHE_MAX_SIZE = 200
+  CACHE_TARGET_SIZE = 160  # 削除時の目標サイズ（80%）
+
   def self.load(name = "local_setting", scope = :local)
-    @@cache ||= {}
-    return @@cache[name] if @@cache[name]
-    
-    # キャッシュサイズ制限（メモリリーク対策）
-    # 重要な設定ファイルは保護、一時的なもののみ削除
-    if @@cache.size > 200  # 上限を大幅に引き上げ
-      protected_keys = ["local_setting", "database", "global_setting", "latest_convert"]
-      removable_keys = @@cache.keys - protected_keys
-      
-      if removable_keys.any?
-        # 保護対象外の最も古いエントリを削除
-        oldest_removable = removable_keys.first
-        @@cache.delete(oldest_removable)
+    @load_mutex.synchronize do
+      @@cache ||= {}
+      @@cache_access_order ||= []
+
+      # キャッシュヒット時はアクセス順を更新
+      if @@cache[name]
+        update_access_order(name)
+        return @@cache[name]
       end
+
+      # キャッシュサイズ制限（メモリリーク対策）
+      # LRUアルゴリズムで最も古くアクセスされたエントリから削除
+      if @@cache.size >= CACHE_MAX_SIZE
+        cleanup_cache
+      end
+
+      {}.tap { |h|
+        h.extend(Inventory)
+        h.init(name, scope)
+        @@cache[name] = h
+        update_access_order(name)
+      }
     end
-    
-    {}.tap { |h|
-      h.extend(Inventory)
-      h.init(name, scope)
-      @@cache[name] = h
-    }
   end
 
   def self.clear
     @@cache = {}
+    @@cache_access_order = []
   end
+
+  def self.unload(name)
+    @load_mutex.synchronize do
+      return unless defined?(@@cache) && @@cache
+      @@cache.delete(name)
+      @@cache_access_order ||= []
+      @@cache_access_order.delete(name)
+    end
+  end
+
+  private
+
+  # アクセス順序を更新（LRU実装）
+  def self.update_access_order(name)
+    @@cache_access_order.delete(name)
+    @@cache_access_order.push(name)
+  end
+
+  # キャッシュのクリーンアップ（LRUアルゴリズム）
+  def self.cleanup_cache
+    # 重要な設定ファイルは保護
+    protected_keys = ["local_setting", "database", "global_setting", "latest_convert", "database_index"]
+
+    # 削除対象のエントリ数を計算
+    entries_to_remove = @@cache.size - CACHE_TARGET_SIZE
+    return if entries_to_remove <= 0
+
+    removed_count = 0
+    # 最も古くアクセスされたエントリから削除
+    @@cache_access_order.dup.each do |name|
+      break if removed_count >= entries_to_remove
+
+      # 保護対象はスキップ
+      next if protected_keys.include?(name)
+
+      @@cache.delete(name)
+      @@cache_access_order.delete(name)
+      removed_count += 1
+    end
+  end
+
+  public
 
   def init(name, scope)
     dir = case scope
@@ -53,9 +105,33 @@ module Inventory
             raise "Unknown scope"
           end
     return nil unless dir
-    @mutex = Mutex.new
+    @mutex = Monitor.new
     @inventory_file_path = File.join(dir, name + ".yaml")
     return unless File.exist?(@inventory_file_path)
+
+    # キャッシュサイズが大きくなるファイルは CacheLoader を通さずに直接ロードする
+    # CacheLoader は結果をメモリに保持し続けるため、これらの巨大なファイルがキャッシュされると
+    # メモリリークの原因となる。
+    # また、Inventory は読み込んだハッシュを直接変更するため、CacheLoader が保持するハッシュも
+    # 更新されてしまい、GC対象にならなくなる。
+    if ["section_convert_cache", "section_hash_cache"].include?(name)
+      yaml = File.read(@inventory_file_path, mode: "r:BOM|UTF-8")
+      begin
+        self.merge!(YAML.unsafe_load(yaml))
+      rescue Psych::SyntaxError
+        unless restore(@inventory_file_path)
+          error "#{@inventory_file_path} が壊れてるっぽい"
+          raise
+        end
+        begin
+          self.merge!(YAML.unsafe_load_file(@inventory_file_path))
+        rescue SystemCallError
+          self.merge!(YAML.unsafe_load(File.read(@inventory_file_path)))
+        end
+      end
+      return
+    end
+
     self.merge!(Helper::CacheLoader.memo(@inventory_file_path) { |yaml|
       begin
         YAML.unsafe_load(yaml)
@@ -79,7 +155,46 @@ module Inventory
       raise "not initialized setting dir yet"
     end
     @mutex.synchronize do
-      File.write(@inventory_file_path, YAML.dump(self))
+      atomic_write(@inventory_file_path, YAML.dump(self))
+    end
+  end
+
+  private
+
+  def atomic_write(file_path, content)
+    temp_file_path = "#{file_path}.#{Process.pid}.#{rand(100000)}.tmp"
+    File.write(temp_file_path, content)
+
+    # Windowsでのファイルロック対策のためのリトライループ
+    # ウイルス対策ソフトやインデックスサービスが一時的にロックする場合があるため
+    20.times do |i|
+      begin
+        File.rename(temp_file_path, file_path)
+        return
+      rescue Errno::EACCES, Errno::EEXIST, Errno::EBUSY
+        # ロックされている場合は少し待ってリトライ
+        sleep 0.1 + (i * 0.05)
+      end
+    end
+    
+    # 最後に一度だけリトライなしで実行（エラーを発生させるため）
+    File.rename(temp_file_path, file_path)
+  ensure
+    # テンポラリファイルが残っていたら削除
+    if File.exist?(temp_file_path)
+      begin
+        File.delete(temp_file_path)
+      rescue Errno::EACCES, Errno::EBUSY
+        # 削除に失敗しても無視（次回の掃除などで消えることを期待）
+      end
+    end
+  end
+
+  public
+
+  def synchronize
+    @mutex.synchronize do
+      yield self
     end
   end
 

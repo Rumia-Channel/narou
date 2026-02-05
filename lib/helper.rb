@@ -7,12 +7,172 @@
 require "open3"
 require "time"
 require "systemu"
+require "etc"
+require "thread"
+require_relative "helper/ebook_converter_queue"
 
 #
 # 雑多なお助けメソッド群
 #
 module Helper
   module_function
+
+  class ThreadPool
+    DEFAULT_FALLBACK = 4
+    LINUX_THREAD_LIMIT = 8
+    LINUX_WEB_THREAD_LIMIT = 2
+    LINUX_LOW_MEMORY_THRESHOLD_MB = 8 * 1024
+    LINUX_LOW_MEMORY_POOL_SIZE = 1
+    THREAD_ENV_KEY = "NAROU_THREAD_POOL_SIZE"
+    CGROUP_MEMORY_UNLIMITED = 9_000_000_000_000_000
+
+    def initialize(size = nil, auto_shutdown: true)
+      @size = determine_pool_size(size)
+      @auto_shutdown = auto_shutdown
+      @jobs = Queue.new
+      @pool = Array.new(@size) do
+        Thread.new do
+          catch(:exit) do
+            loop do
+              job, args = @jobs.pop
+              job.call(*args)
+            end
+          end
+        end
+      end
+    end
+
+    def process(enumerable, &block)
+      wg = ThreadGroup.new
+      count = 0
+      mutex = Mutex.new
+      cond = ConditionVariable.new
+
+      enumerable.each do |item|
+        mutex.synchronize do
+          count += 1
+        end
+        @jobs.push [proc { |*args|
+          begin
+            block.call(*args)
+          ensure
+            mutex.synchronize do
+              count -= 1
+              cond.signal if count == 0
+            end
+          end
+        }, [item]]
+      end
+
+      mutex.synchronize do
+        while count > 0
+          cond.wait(mutex)
+        end
+      end
+    ensure
+      shutdown if @auto_shutdown
+    end
+
+    def shutdown
+      return if @pool.nil?
+      @size.times do
+        @jobs.push [proc { throw :exit }, []]
+      end
+      @pool.each(&:join)
+      @pool = nil
+    end
+
+    private
+
+    def determine_pool_size(size)
+      explicit = normalize_size(size) || env_pool_size || default_pool_size
+      [explicit, 1].max
+    end
+
+    def env_pool_size
+      env = ENV[THREAD_ENV_KEY]
+      normalize_size(env)
+    end
+
+    def normalize_size(value)
+      return unless value
+      number = value.to_i
+      number.positive? ? number : nil
+    end
+
+    # Linux Ruby allocates ~8MB stack per thread, so cap workers to avoid
+    # ballooning memory and runaway CPU usage on large hosts.
+    def default_pool_size
+      processors = (Etc.nprocessors rescue DEFAULT_FALLBACK)
+      processors = DEFAULT_FALLBACK if processors.nil? || processors <= 0
+      return processors if windows_like_platform?
+
+      limit = [processors, LINUX_THREAD_LIMIT].min
+      linux_web_limit = web_thread_limit
+      limit = [limit, linux_web_limit].min if linux_web_limit
+
+      low_memory_limit = linux_memory_limit
+      limit = [limit, low_memory_limit].min if low_memory_limit
+
+      [limit, 1].max
+    end
+
+    def windows_like_platform?
+      Helper.os_windows? || Helper.os_mac? || Helper.os_cygwin?
+    end
+
+    def web_thread_limit
+      return nil unless defined?(Narou) && Narou.respond_to?(:web?) && Narou.web?
+      LINUX_WEB_THREAD_LIMIT
+    end
+
+    def linux_memory_limit
+      total_mb = linux_memory_total_mb
+      return nil unless total_mb
+      if total_mb <= LINUX_LOW_MEMORY_THRESHOLD_MB
+        [LINUX_LOW_MEMORY_POOL_SIZE, 1].max
+      else
+        nil
+      end
+    end
+
+    def linux_memory_total_mb
+      cgroup_limit = read_cgroup_memory_limit_mb
+      return cgroup_limit if cgroup_limit
+      read_meminfo_total_mb
+    end
+
+    def read_cgroup_memory_limit_mb
+      paths = [
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        "/sys/fs/cgroup/memory.max"
+      ]
+      paths.each do |path|
+        next unless File.file?(path)
+        content = File.read(path).strip
+        next if content.empty? || content == "max"
+        value = content.to_i
+        next if value <= 0 || value >= CGROUP_MEMORY_UNLIMITED
+        return value / (1024 * 1024)
+      end
+      nil
+    rescue StandardError
+      nil
+    end
+
+    def read_meminfo_total_mb
+      meminfo = "/proc/meminfo"
+      return nil unless File.readable?(meminfo)
+      File.foreach(meminfo) do |line|
+        next unless line.start_with?("MemTotal:")
+        parts = line.split
+        return parts[1].to_i / 1024 if parts[1]
+      end
+      nil
+    rescue StandardError
+      nil
+    end
+  end
 
   HOST_OS = RbConfig::CONFIG["host_os"]
   FILENAME_LENGTH_LIMIT = 50
@@ -407,37 +567,54 @@ module Helper
   # end
   #
   class AsyncCommand
-    def self.exec(command, sleep_time = 0.5, &block)
-      looper = nil
+    def self.exec(command, sleep_time = 0.5, chdir: nil, &block)
       _pid = nil
-      status, stdout, stderr = systemu(command) do |pid|
-        _pid = pid
-        looper = Thread.new(pid) do |pid|
-          loop do
-            block.call if block
-            sleep(sleep_time)
-            next unless Narou::Worker.canceled?
-            next unless Narou::WebWorker.canceled?
-            Process.kill("KILL", pid)
-            Process.detach(pid)
+      stdout_str = ""
+      stderr_str = ""
+      status = nil
+      
+      opts = {}
+      opts[:chdir] = chdir if chdir
+
+      Open3.popen3(command, opts) do |stdin, stdout, stderr, wait_thr|
+        _pid = wait_thr.pid
+        stdin.close
+
+        # Output reading threads
+        out_t = Thread.new { stdout.read }
+        err_t = Thread.new { stderr.read }
+
+        # Monitoring loop
+        loop do
+          # Check if process finished
+          unless wait_thr.alive?
+            break
+          end
+
+          block.call if block
+          
+          # Use thread join with timeout as sleep
+          if wait_thr.join(sleep_time)
+            break
+          end
+
+          if Narou::Worker.canceled? || Narou::WebWorker.canceled?
+            process_kill(_pid)
             break
           end
         end
-        looper.join
-        looper = nil
+
+        stdout_str = out_t.value
+        stderr_str = err_t.value
+        status = wait_thr.value
       end
-      stdout.force_encoding(Encoding::UTF_8)
-      stderr.force_encoding(Encoding::UTF_8)
-      return [stdout, stderr, status]
-    rescue RuntimeError => e
-      raise unless e.message.include?("interrupted")
-      process_kill(_pid)
-      raise Interrupt
+
+      stdout_str.force_encoding(Encoding::UTF_8)
+      stderr_str.force_encoding(Encoding::UTF_8)
+      return [stdout_str, stderr_str, status]
     rescue Interrupt
       process_kill(_pid)
       raise
-    ensure
-      looper&.kill
     end
 
     def self.process_kill(pid)

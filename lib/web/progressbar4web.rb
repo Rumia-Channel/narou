@@ -18,19 +18,26 @@ class ProgressBar
 
   def initialize(*args, **opt)
     original_initialize(*args, **opt)
-    @@push_server.send_all("progressbar.init" => { target_console: io.target_console })
+    @@push_server.send_all("progressbar.init" => {
+      target_console: io.target_console,
+      topic: @topic
+    })
   end
 
   def output(num)
     percent = calc_ratio(num) * 100
     @@push_server.send_all("progressbar.step" => {
       percent: percent,
-      target_console: io.target_console
+      target_console: io.target_console,
+      topic: @topic
     })
   end
 
   def clear
-    @@push_server.send_all("progressbar.clear" => { target_console: io.target_console })
+    @@push_server.send_all("progressbar.clear" => {
+      target_console: io.target_console,
+      topic: @topic
+    })
   end
 end
 

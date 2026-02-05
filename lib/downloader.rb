@@ -162,7 +162,12 @@ class Downloader
       when :url, :ncode
         raise InvalidTarget, "対応外の#{type}です(#{target})"
       when :id
-        raise InvalidTarget, "指定のID(#{target})は存在しません"
+        if id
+          data = Downloader.database[id]
+          raise InvalidTarget, "指定のID(#{target})のURL(#{data["toc_url"]})に対応する設定が見つかりません"
+        else
+          raise InvalidTarget, "指定のID(#{target})は存在しません"
+        end
       when :other
         raise InvalidTarget, "指定の小説(#{target})は存在しません"
       end
@@ -364,7 +369,7 @@ class Downloader
   end
 
   def self.section_hash_cache
-    @section_hash_cache ||= Inventory.load(SECTION_HASH_CACHE_NAME)
+    Inventory.load(SECTION_HASH_CACHE_NAME)
   end
 
   def self.clear_section_hash_cache(id)

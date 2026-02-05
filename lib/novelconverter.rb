@@ -42,6 +42,7 @@ class NovelConverter
   attr_reader :use_dakuten_font, :stream_io
 
   SECTION_CONVERT_CACHE_NAME = "section_convert_cache"
+  SECTION_CONVERT_CACHE_STORE = "section_convert_sections"
 
   def self.extensions_of_converted_files(device)
     exts = [".txt"]
@@ -54,21 +55,32 @@ class NovelConverter
   end
 
   def self.section_convert_cache
-    @section_convert_cache ||= Inventory.load(SECTION_CONVERT_CACHE_NAME)
+    Inventory.load(SECTION_CONVERT_CACHE_NAME)
   end
 
   def self.clear_section_convert_cache(id)
-    cache = section_convert_cache
-    removed = cache.delete(id.to_s)
-    cache.save if removed
+    section_convert_cache.synchronize do |cache|
+      removed = cache.delete(id.to_s)
+      if removed
+        delete_section_cache_bucket(id)
+        cache.save
+      end
+    end
   end
 
   def self.clear_section_convert_cache_entry(id, relative_path)
-    cache = section_convert_cache
-    bucket = cache[id.to_s]
-    return unless bucket&.delete(relative_path)
-    cache.delete(id.to_s) if bucket.empty?
-    cache.save
+    section_convert_cache.synchronize do |cache|
+      bucket = cache[id.to_s]
+      return unless bucket
+      entry = bucket.delete(relative_path)
+      return unless entry
+      delete_section_cache_path(entry["section_path"])
+      if bucket.empty?
+        cache.delete(id.to_s)
+        delete_section_cache_bucket(id)
+      end
+      cache.save
+    end
   end
 
   #
@@ -208,7 +220,6 @@ class NovelConverter
     if Helper.os_cygwin?
       abs_srcpath = Helper.convert_to_windows_path(abs_srcpath)
     end
-    Dir.chdir(aozoraepub3_dir)
     command = %!java #{java_encoding} -cp #{aozoraepub3_basename} AozoraEpub3 -enc UTF-8 -of #{device_option} ! +
               %!#{cover_option} #{dst_option} #{ext_option} #{yokogaki_option} "#{abs_srcpath}"!
     if Helper.os_windows?
@@ -217,11 +228,10 @@ class NovelConverter
     activate_dakuten_font_files if use_dakuten_font
     stream_io.print "AozoraEpub3でEPUBに変換しています"
     begin
-      res = Helper::AsyncCommand.exec(command) do
+      res = Helper::AsyncCommand.exec(command, chdir: aozoraepub3_dir) do
         stream_io.print "."
       end
     ensure
-      Dir.chdir(pwd)
       inactivate_dakuten_font_files if use_dakuten_font
     end
 
@@ -539,19 +549,67 @@ class NovelConverter
     display_header
     initialize_event
 
-    if text
-      array_of_converted_text = convert_main_for_text(text)
-    else
-      array_of_converted_text = convert_main_for_novel
-      update_latest_convert_novel
-    end
-    inspect_novel(array_of_converted_text)
-
     array_of_output_path = []
-    array_of_converted_text.each_with_index do |converted_text, i|
-      output_path = create_output_path(text, converted_text, i + 1)
+
+    if text
+      # テキストファイル変換モード
+      converted_text = convert_main_for_text(text)
+      # inspect_novel は配列を受け取る仕様
+      inspect_novel([converted_text])
+      
+      output_path = create_output_path(text, converted_text, 1)
       File.write(output_path, converted_text)
       array_of_output_path.push(output_path)
+    else
+      # 小説変換モード
+      toc = Downloader.get_toc_data(@setting.archive_path)
+      subtitles = cut_subtitles(toc["subtitles"])
+      
+      # 分割処理
+      if @setting.slice_size > 0 && subtitles.length > @setting.slice_size
+        stream_io.puts "#{@setting.slice_size}話ごとに分割して変換します"
+        array_of_subtitles = subtitles.each_slice(@setting.slice_size).to_a
+      else
+        array_of_subtitles = [subtitles]
+      end
+
+      # あらすじ変換
+      toc["story"] = @converter.convert(toc["story"], "story")
+      
+      # 挿絵設定
+      site_setting = SiteSetting.find(toc["toc_url"])
+      html = HTML.new
+      html.strip_decoration_tag = @setting.enable_strip_decoration_tag
+      html.set_illust_setting(
+        current_url: site_setting&.[]("illust_current_url"),
+        grep_pattern: site_setting&.[]("illust_grep_pattern")
+      )
+
+      # ループ内で変換・検査・書き出しを完結させることでメモリ消費を抑える
+      array_of_subtitles.each_with_index do |sliced_subtitles, index|
+        @converter.subtitles = sliced_subtitles
+        html.clear
+        sections = subtitles_to_sections(sliced_subtitles, html)
+        
+        converted_text = create_novel_text_by_template(
+          sections, toc, false, # is_hotentry は false 固定 (元のコード準拠)
+          array_of_subtitles.length == 1 ? nil : index + 1
+        )
+
+        # 検査
+        inspect_novel([converted_text])
+
+        # 書き出し
+        output_path = create_output_path(text, converted_text, index + 1)
+        File.write(output_path, converted_text)
+        array_of_output_path.push(output_path)
+        
+        # 明示的にGCを促す（巨大な文字列解放のため）
+        converted_text = nil
+        sections = nil
+      end
+      
+      update_latest_convert_novel
     end
 
     display_footer
@@ -567,7 +625,8 @@ class NovelConverter
     progressbar = nil
 
     on(:"convert_main.init") do |subtitles|
-      progressbar = ProgressBar.new(subtitles.size, io: stream_io)
+      topic = @novel_id ? "ID:#{@novel_id}" : @novel_title
+      progressbar = ProgressBar.new(subtitles.size, io: stream_io, topic: topic)
     end
 
     on(:"convert_main.loop") do |i|
@@ -597,6 +656,43 @@ class NovelConverter
     return {} unless caching_available?
     cache = self.class.section_convert_cache
     cache[@novel_id.to_s] ||= {}
+  end
+
+  def self.section_cache_storage_root
+    Narou.misc_dir&.join(SECTION_CONVERT_CACHE_STORE)
+  end
+
+  def self.ensure_section_cache_storage_root
+    root = section_cache_storage_root
+    return nil unless root
+    FileUtils.mkdir_p(root)
+    root
+  rescue SystemCallError
+    nil
+  end
+
+  def self.section_cache_bucket_dir(novel_id, ensure_dir: true)
+    return nil unless novel_id
+    root = ensure_section_cache_storage_root
+    return nil unless root
+    dir = root.join(novel_id.to_s)
+    FileUtils.mkdir_p(dir) if ensure_dir
+    dir
+  rescue SystemCallError
+    nil
+  end
+
+  def self.delete_section_cache_bucket(novel_id)
+    dir = section_cache_bucket_dir(novel_id, ensure_dir: false)
+    return unless dir
+    FileUtils.rm_rf(dir)
+  rescue SystemCallError
+  end
+
+  def self.delete_section_cache_path(path)
+    return unless path
+    FileUtils.rm_f(path)
+  rescue SystemCallError
   end
 
   def conversion_context_signature
@@ -631,25 +727,41 @@ class NovelConverter
     return nil unless cached
     return nil unless cached["digest"] == digest
     return nil unless cached["signature"] == conversion_context_signature
+
+    section_data = load_section_cache_entry(relative_path, cached)
+    return nil unless section_data
+
     {
-      section: deep_clone(cached["section"]),
+      section: deep_clone(section_data),
       use_dakuten_font: cached["use_dakuten_font"] ? true : false
     }
   end
 
   def store_cached_section(relative_path, digest, section, use_dakuten_font)
     return unless caching_available?
+    cloned_section = deep_clone(section)
     payload = {
       "digest" => digest,
       "signature" => conversion_context_signature,
-      "section" => deep_clone(section),
       "use_dakuten_font" => !!use_dakuten_font
     }
-    bucket = section_convert_bucket
-    changed = bucket[relative_path] != payload
-    if changed
-      bucket[relative_path] = payload
-      mark_conversion_cache_dirty
+
+    section_path = write_section_cache(relative_path, cloned_section)
+    if section_path
+      payload["section_path"] = section_path
+    else
+      payload["section"] = cloned_section
+    end
+
+    self.class.section_convert_cache.synchronize do
+      bucket = section_convert_bucket
+      previous = bucket[relative_path]
+      cleanup_section_cache_entry(previous)
+      changed = bucket[relative_path] != payload
+      if changed
+        bucket[relative_path] = payload
+        mark_conversion_cache_dirty
+      end
     end
   end
 
@@ -660,19 +772,73 @@ class NovelConverter
   def flush_conversion_cache
     return unless caching_available?
     return unless @conversion_cache_dirty
-    self.class.section_convert_cache.save
+    self.class.section_convert_cache.synchronize do |cache|
+      cache.save
+    end
     @conversion_cache_dirty = false
   end
 
   def clear_cached_section(relative_path)
     return unless caching_available?
     bucket = section_convert_bucket
-    changed = bucket.delete(relative_path)
-    mark_conversion_cache_dirty if changed
+    entry = bucket.delete(relative_path)
+    cleanup_section_cache_entry(entry)
+    mark_conversion_cache_dirty if entry
   end
 
   def deep_clone(object)
     Marshal.load(Marshal.dump(object))
+  end
+
+  def write_section_cache(relative_path, section)
+    return nil unless caching_available?
+    path = self.class.section_cache_bucket_dir(@novel_id)&.join("#{Digest::SHA256.hexdigest(relative_path)}.bin")
+    return nil unless path
+    File.binwrite(path, Marshal.dump(section))
+    path.to_s
+  rescue SystemCallError
+    nil
+  end
+
+  def load_section_cache_entry(relative_path, cached)
+    if cached["section_path"]
+      read_section_cache(cached["section_path"])
+    elsif cached["section"]
+      migrate_cached_section(relative_path, cached)
+    else
+      nil
+    end
+  end
+
+  def read_section_cache(path)
+    return nil unless path
+    data = File.binread(path)
+    Marshal.load(data)
+  rescue StandardError
+    nil
+  end
+
+  def migrate_cached_section(relative_path, cached)
+    section = cached["section"]
+    section_path = write_section_cache(relative_path, section)
+    return section unless section_path
+    self.class.section_convert_cache.synchronize do
+      bucket = section_convert_bucket
+      entry = bucket[relative_path]
+      if entry
+        updated = entry.dup
+        updated.delete("section")
+        updated["section_path"] = section_path
+        bucket[relative_path] = updated
+        mark_conversion_cache_dirty
+      end
+    end
+    section
+  end
+
+  def cleanup_section_cache_entry(entry)
+    return unless entry
+    self.class.delete_section_cache_path(entry["section_path"])
   end
 
   def load_novel_section(subtitle_info, section_save_dir)
@@ -864,6 +1030,20 @@ class NovelConverter
     output_path
   end
 
+  def cut_subtitles(subtitles)
+    case cut_size = @setting.cut_old_subtitles
+    when 0
+      result = subtitles
+    when 1...subtitles.size
+      stream_io.puts "#{cut_size}話分カットして変換します"
+      result = subtitles[cut_size..-1]
+    else
+      stream_io.puts "最新話のみ変換します"
+      result = [subtitles[-1]]
+    end
+    result
+  end
+
   #
   # テキストファイル変換時の実質的なメイン処理
   #
@@ -879,67 +1059,7 @@ class NovelConverter
 
     @use_dakuten_font = @converter.use_dakuten_font
 
-    [converted_text]
-  end
-
-  #
-  # 管理小説変換時の実質的なメイン処理
-  #
-  # 引数 subtitles にデータを渡した場合はそれを直接使う
-  # is_hotentry を有効にすると出力されるテキストファイルにあらすじや作品タイトル等が含まれなくなる
-  # また、 is_hotentry を有効にすると分割も行われなくなる
-  #
-  def convert_main_for_novel(subtitles = nil, is_hotentry = false)
-    toc = Downloader.get_toc_data(@setting.archive_path)
-    unless subtitles
-      subtitles = cut_subtitles(toc["subtitles"])
-    end
-    if is_hotentry == false && @setting.slice_size > 0 && subtitles.length > @setting.slice_size
-      stream_io.puts "#{@setting.slice_size}話ごとに分割して変換します"
-      array_of_subtitles = subtitles.each_slice(@setting.slice_size).to_a
-    else
-      array_of_subtitles = [subtitles]
-    end
-    toc["story"] = @converter.convert(toc["story"], "story")
-    site_setting = SiteSetting.find(toc["toc_url"])
-    html = HTML.new
-    html.strip_decoration_tag = @setting.enable_strip_decoration_tag
-    html.set_illust_setting(
-      current_url: site_setting["illust_current_url"],
-      grep_pattern: site_setting["illust_grep_pattern"]
-    )
-    array_of_converted_text = []
-    array_of_subtitles.each_with_index do |sliced_subtitles, index|
-      @converter.subtitles = sliced_subtitles
-      html.clear
-      sections = subtitles_to_sections(sliced_subtitles, html)
-      array_of_converted_text.push(
-        create_novel_text_by_template(
-          sections, toc, is_hotentry,
-          array_of_subtitles.length == 1 ? nil : index + 1
-        )
-      )
-    end
-
-    if is_hotentry
-      array_of_converted_text[0]
-    else
-      array_of_converted_text
-    end
-  end
-
-  def cut_subtitles(subtitles)
-    case cut_size = @setting.cut_old_subtitles
-    when 0
-      result = subtitles
-    when 1...subtitles.size
-      stream_io.puts "#{cut_size}話分カットして変換します"
-      result = subtitles[cut_size..-1]
-    else
-      stream_io.puts "最新話のみ変換します"
-      result = [subtitles[-1]]
-    end
-    result
+    converted_text
   end
 
   #
@@ -1081,9 +1201,9 @@ class NovelConverter
   #
   def update_latest_convert_novel
     id = Downloader.get_id_by_target(@novel_title)
-    Inventory.load("latest_convert").tap { |inv|
+    Inventory.load("latest_convert").synchronize do |inv|
       inv["id"] = id
       inv.save
-    }
+    end
   end
 end

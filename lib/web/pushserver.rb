@@ -15,6 +15,7 @@ module Narou
     include Eventable
 
     HISTORY_SAVED_COUNT = 60 # 保存する履歴の数
+    CONNECTION_CLEANUP_INTERVAL = 60 # 定期クリーンアップの間隔（秒）
 
     attr_accessor :port, :host
     attr_reader :accepted_domains, :connections
@@ -27,7 +28,9 @@ module Narou
       @accepted_domains = ["*"]
       @port = 31000
       @connections = []
+      @connections_mutex = Mutex.new
       @server_thread = nil
+      @cleanup_thread = nil
       clear_history
     end
 
@@ -37,18 +40,18 @@ module Narou
         port: @port,
         host: @host
       })
+
+      # 定期的にデッドコネクションをクリーンアップするスレッド
+      start_cleanup_thread
+
       @server_thread = Thread.new do
         @server.run do |ws|
           que = nil
           thread = nil
+          connection_entry = nil
           begin
             ws.handshake
             que = Queue.new
-            @connections.push(que)
-
-            @history.compact.each do |message|
-              ws.send(JSON.generate(echo: message))
-            end
 
             thread = Thread.new do
               begin
@@ -62,6 +65,16 @@ module Narou
                 # その他のエラーもログに出力してスレッド終了
                 puts "[ERROR] WebSocket send thread error: #{e.class}: #{e.message}" if $DEBUG
               end
+            end
+
+            # コネクション情報を登録
+            connection_entry = { queue: que, thread: thread }
+            @connections_mutex.synchronize do
+              @connections.push(connection_entry)
+            end
+
+            @history.compact.each do |message|
+              ws.send(JSON.generate(echo: message))
             end
 
             while data = ws.receive
@@ -88,7 +101,9 @@ module Narou
             puts "[ERROR] WebSocket unexpected error: #{e.class}: #{e.message}"
             puts e.backtrace.first(5).join("\n") if $DEBUG
           ensure
-            @connections.delete(que) if que
+            @connections_mutex.synchronize do
+              @connections.delete(connection_entry) if connection_entry
+            end
             thread.terminate if thread
           end
         end
@@ -100,6 +115,10 @@ module Narou
     #
     def quit
       @server.quit if @server
+      if @cleanup_thread && @cleanup_thread.alive?
+        @cleanup_thread.kill
+        @cleanup_thread.join(0.5)
+      end
       if @server_thread && @server_thread.alive?
         @server_thread.kill
         @server_thread.join(1) # 最大1秒待つ
@@ -122,9 +141,31 @@ module Narou
         data = { data => true }
       end
       json = JSON.generate(data)
-      @connections.each do |queue_of_connection|
-        queue_of_connection.push(json)
+
+      dead_connections = []
+      @connections_mutex.synchronize do
+        @connections.each do |connection_entry|
+          # スレッドが生きている場合のみメッセージを送信
+          if connection_entry[:thread]&.alive?
+            begin
+              connection_entry[:queue].push(json)
+            rescue => e
+              # push に失敗した場合、デッドコネクションとしてマーク
+              puts "[DEBUG] Failed to push to queue: #{e.message}" if $DEBUG
+              dead_connections << connection_entry
+            end
+          else
+            # スレッドが死んでいる場合、デッドコネクションとしてマーク
+            dead_connections << connection_entry
+          end
+        end
+
+        # デッドコネクションを削除
+        dead_connections.each do |dead_conn|
+          @connections.delete(dead_conn)
+        end
       end
+
       # echo 以外のイベントは履歴に保存しない
       message = data[:echo]
       if message
@@ -143,6 +184,43 @@ module Narou
       else
         @history.push(message)
         @history.shift
+      end
+    end
+
+    private
+
+    #
+    # 定期的にデッドコネクションをクリーンアップするスレッドを起動
+    #
+    def start_cleanup_thread
+      @cleanup_thread = Thread.new do
+        loop do
+          sleep CONNECTION_CLEANUP_INTERVAL
+          cleanup_dead_connections
+        end
+      rescue => e
+        puts "[ERROR] Cleanup thread error: #{e.class}: #{e.message}" if $DEBUG
+      end
+    end
+
+    #
+    # デッドコネクション（スレッドが死んでいる接続）を削除
+    #
+    def cleanup_dead_connections
+      dead_connections = []
+      @connections_mutex.synchronize do
+        @connections.each do |connection_entry|
+          unless connection_entry[:thread]&.alive?
+            dead_connections << connection_entry
+          end
+        end
+
+        if dead_connections.any?
+          dead_connections.each do |dead_conn|
+            @connections.delete(dead_conn)
+          end
+          puts "[DEBUG] Cleaned up #{dead_connections.size} dead connection(s)" if $DEBUG
+        end
       end
     end
   end

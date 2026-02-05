@@ -2,6 +2,10 @@
 
 プロジェクトを作成していただいた [whiteleaf7](https://github.com/whiteleaf7) 氏、カオスの塊だったこのforkに修正と機能追加を行ってくれた [ponponUSA](https://github.com/ponponusa) 氏に感謝を。
 
+## 現在の方針
+[ponponUSA](https://github.com/ponponusa) 氏 の方は 新UIや積極的な開発に意欲的であり、私の方ではレガシー環境による   
+`gem specific_install https://github.com/Rumia-Channel/narou.git`  
+のみで完結するシステムの維持の方をメインにチマチマとメンテナンスしていこうかなという方針です。
 
 ## 概要 - Summary
 

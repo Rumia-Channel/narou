@@ -18,6 +18,7 @@ require "rack/protection"
 require "tilt/erubi"
 require "tilt/haml"
 require "tilt/sass"
+require "etc"
 require_relative "../commandline"
 require_relative "../inventory"
 require_relative "web_worker"
@@ -46,7 +47,7 @@ class Narou::AppServer < Sinatra::Base
 
     set :environment, :production unless $development
     set :server, :puma
-    set :server_settings, { Silent: true }
+    set :server_settings, { Silent: true, Threads: "0:#{Etc.nprocessors * 2}" }
 
     if $debug
       use BetterErrors::Middleware
@@ -414,10 +415,28 @@ class Narou::AppServer < Sinatra::Base
   get "/novels/:id/download" do
     device = Narou.get_device
     ext = device ? device.ebook_file_ext : ".epub"
+    
+    # ファイル存在確認用のヘルパー
+    exists = ->(p) { p && !p.empty? && File.exist?(p[0]) }
+    
     paths = Narou.get_ebook_file_paths(@id, ext)
-    if !paths.empty? && File.exist?(paths[0])
+    
+    # 指定形式が無い場合、EPUBで再試行するフォールバック処理
+    if !exists.call(paths) && ext != ".epub"
+      epub_paths = Narou.get_ebook_file_paths(@id, ".epub")
+      if exists.call(epub_paths)
+        paths = epub_paths
+        # ログ用に拡張子変数を更新（処理には影響なし）
+        ext = ".epub" 
+      end
+    end
+
+    if exists.call(paths)
       send_file(paths[0], filename: File.basename(paths[0]), type: "application/octet-stream")
     else
+      warn "Download failed: ID=#{@id}, Device=#{device&.name}, Ext=#{ext}"
+      warn "Paths=#{paths.inspect}"
+      warn "File exists? false"
       not_found
     end
   end

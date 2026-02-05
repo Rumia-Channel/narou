@@ -13,6 +13,8 @@ require_relative "../worker"
 
 module Command
   class Convert < CommandBase
+    attr_accessor :options
+
     def self.oneline_help
       "小説を変換します。管理小説以外にテキストファイルも変換可能"
     end
@@ -168,6 +170,9 @@ module Command
     end
 
     def build_device_names
+      if @options["make-zip"]
+        return ["ibunko"]
+      end
       multi_device = @options["multi-device"]
       device_names = if multi_device
                        multi_device.split(",").map(&:strip).map(&:downcase).select do |name|
@@ -201,101 +206,166 @@ module Command
       tagname_to_ids(argv)
       total_count = argv.length
       completed_count = 0
+      mutex = Mutex.new
+      ebook_queue = Helper::EbookConverterQueue.new
       
       $stdout2.puts "変換処理開始: #{total_count}件の小説を処理します"
       
-      argv.each.with_index(1) do |target, index|
+      args = argv.map.with_index(1) { |target, index| [target, index] }
+
+      Helper::ThreadPool.new.process(args) do |target, index|
         begin
-          $stdout2.puts "[#{index}/#{total_count}] 処理中: #{target}"
-          Narou.lock(target) do
-            convert_novel_main(target, index)
+          cmd = self.class.new
+          cmd.stream_io = stream_io
+          cmd.options = @options.dup
+          cmd.device = @device
+          if @device
+            cmd.extend(@device.get_hook_module)
           end
-          completed_count += 1
-          $stdout2.puts "[#{index}/#{total_count}] 完了: #{target}"
+          cmd.init([target])
+
+          mutex.synchronize do
+            $stdout2.puts "[#{index}/#{total_count}] 処理中: #{target}"
+          end
+
+          Narou.lock(target) do
+            cmd.convert_novel_main(target, index, ebook_queue)
+          end
+
+          # メモリリーク対策: 1つの小説の処理が終わるごとにGCを強制実行
+          GC.start
+
+          mutex.synchronize do
+            completed_count += 1
+            $stdout2.puts "[#{index}/#{total_count}] 完了: #{target}"
+          end
         rescue => e
           if ENV["NAROU_ENV"] == "test"
-            # テスト時は握りつぶさずに原因を見える化
             raise
           else
-            $stdout2.error "[#{index}/#{total_count}] エラー: #{target} - #{e.message}"
-            # 個別のエラーでは処理を継続
+            mutex.synchronize do
+              $stdout2.error "[#{index}/#{total_count}] エラー: #{target} - #{e.message}"
+            end
           end
         end
       end
       
+      ebook_queue.shutdown
       $stdout2.puts "変換処理完了: #{completed_count}/#{total_count}件が正常に変換されました"
     rescue Interrupt
+      ebook_queue.shutdown
       $stdout2.puts "変換を中断しました (#{completed_count}/#{total_count}件完了)"
       exit Narou::EXIT_INTERRUPT
     end
 
-    def convert_novel_main(target, index)
-      @target = target
-      @novel_data = nil
-
+    def convert_novel_main(target, index, ebook_queue)
+      novel_data = nil
+      device = @device
+      output_filename = nil
+      
       Helper.print_horizontal_rule($stdout2) if index > 1
       if @basename
-        @basename << " (#{index})" if argv.length > 1
-        @output_filename = @basename + @ext
+        # indexが指定されている（複数変換）場合はファイル名にサフィックスをつける
+        basename = @basename.dup
+        # argv.length > 1 の代わりのロジック: 呼び出し元で複数なら index が振られる
+        # ここでは常に (index) をつける（単一変換でindex=1の場合もつくが、convert_novelsからは常にindex付きで呼ばれる）
+        # コマンドラインからの単一指定の場合は index=1 だが、basename指定がなければここに来ない
+        # -o 指定ありで複数変換の場合
+        basename << " (#{index})" if index > 0 # 1-based index
+        output_filename = basename + @ext
       end
 
       if File.file?(target.to_s)
+        argument_target_type = :file
         using_send_command = false
         # not remove output files for text file conversion
-        res = convert_txt(target)
+        res = convert_txt(target, output_filename)
       else
+        argument_target_type = :novel
         using_send_command = true
         unless Downloader.novel_exists?(target)
           $stdout2.error "#{target} は存在しません"
           return
         end
         # remove output files for novel conversion
-        NovelConverter.extensions_of_converted_files(@device).each do |ext|
+        NovelConverter.extensions_of_converted_files(device).each do |ext|
           ebook_paths = Narou.get_ebook_file_paths(target, ext)
           NovelConverter.clean_up_temp_files(ebook_paths)
         end
         # start novel conversion
-        @argument_target_type = :novel
+        # options["yokogaki"] はローカルコピーを使用
+        current_options = @options.dup
+        current_options["yokogaki"] = NovelSetting.load(target)["enable_yokogaki"]
+        
         res = NovelConverter.convert(target, {
-                output_filename: @output_filename,
-                display_inspector: @options["inspect"],
-                ignore_force: @options["ignore-force"],
-                ignore_default: @options["ignore-default"],
+                output_filename: output_filename,
+                display_inspector: current_options["inspect"],
+                ignore_force: current_options["ignore-force"],
+                ignore_default: current_options["ignore-default"],
               })
-        @novel_data = Downloader.get_data_by_target(target)
-        @options["yokogaki"] = NovelSetting.load(target)["enable_yokogaki"]
+        novel_data = Downloader.get_data_by_target(target)
       end
       return unless res
       array_of_converted_txt_path = res[:converted_txt_paths]
-      ebook_file = nil
-      array_of_converted_txt_path.each do |converted_txt_path|
-        @converted_txt_path = converted_txt_path
-        @use_dakuten_font = res[:use_dakuten_font]
+      
+      # EPUB/MOBI作成と送信処理をキューに追加
+      ebook_queue.push do
+        # スレッドセーフなインスタンス変数の設定（キュー実行時に行う）
+        @converted_txt_path = nil # 初期化
+        
+        # Web UIの場合は$stdout2を使う（i文庫などの出力位置と合わせるため）
+        output_io = Narou.web? ? $stdout2 : stream_io
 
-        ebook_file = hook_call(:convert_txt_to_ebook_file)
-        next if ebook_file.nil?
-        if ebook_file
-          copy_to_converted_file(ebook_file, io: stream_io)
-          # ZIP専用のコピー先が設定されている場合、ZIPを追加コピー
-          copy_to_converted_zip_file(ebook_file, io: stream_io)
-          send_file_to_device(ebook_file) unless using_send_command
+        last_ebook_file = nil
+        array_of_converted_txt_path.each do |converted_txt_path|
+          use_dakuten_font = res[:use_dakuten_font]
+          
+          # i文庫(ibunko)の場合、フック内で元のメソッド(EPUB生成)が呼ばれない仕様のため、
+          # 設定でEPUB生成が無効化されていなければ、ここで明示的に呼び出してEPUBを生成しておく
+          if device && device.ibunko? && !@options["no-epub"]
+             NovelConverter.convert_txt_to_ebook_file(converted_txt_path, {
+               use_dakuten_font: use_dakuten_font,
+               device: device,
+               verbose: @options["verbose"],
+               no_epub: false,
+               no_mobi: true,
+               no_strip: true,
+               no_cleanup_txt: true,
+               yokogaki: @options["yokogaki"],
+               stream_io: output_io
+             })
+          end
+
+          # フック呼び出し（内部で@converted_txt_path等をセット）
+          ebook_file = hook_call(:convert_txt_to_ebook_file, converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, output_io)
+          
+          next if ebook_file.nil?
+          last_ebook_file = ebook_file
+          
+          if ebook_file
+            copy_to_converted_file(ebook_file, device, novel_data, io: output_io)
+            copy_to_converted_zip_file(ebook_file, io: output_io)
+            send_file_to_device(ebook_file, target, device, argument_target_type, io: output_io) unless using_send_command
+          end
+        end
+        
+        if using_send_command && last_ebook_file
+          send_file_to_device(last_ebook_file, target, device, argument_target_type, io: output_io)
         end
       end
-      send_file_to_device(ebook_file) if
-        using_send_command && ebook_file
 
-      if @options["no-open"].! && Narou.web?.!
-        Helper.open_directory(File.dirname(@converted_txt_path), "小説の保存フォルダを開きますか")
+      if @options["no-open"].! && Narou.web?.! && array_of_converted_txt_path&.first
+        Helper.open_directory(File.dirname(array_of_converted_txt_path.first), "小説の保存フォルダを開きますか")
       end
     end
 
     #
     # 直接指定されたテキストファイルを変換する
     #
-    def convert_txt(target)
+    def convert_txt(target, output_filename)
       return NovelConverter.convert_file(target, {
                encoding: @enc,
-               output_filename: @output_filename,
+               output_filename: output_filename,
                display_inspector: @options["inspect"],
                ignore_force: @options["ignore-force"],
                ignore_default: @options["ignore-default"],
@@ -321,11 +391,18 @@ module Command
     #
     # 変換された整形済みテキストファイルをデバイスに対応した書籍データに変換する
     #
-    def convert_txt_to_ebook_file
+    def convert_txt_to_ebook_file(converted_txt_path, use_dakuten_font, novel_data, device, output_filename, argument_target_type, io = nil)
+      io ||= stream_io
+      # インスタンス変数に依存するメソッド（generate_ibunko_zip等）のために値をセット
+      @converted_txt_path = converted_txt_path
+      @novel_data = novel_data
+      @device = device
+      @argument_target_type = argument_target_type
+
       # dc:subject埋め込み設定の確認とタグ情報の取得
       dc_subjects = nil
-      if @options["add-dc-subject-to-epub"] && @novel_data && @novel_data["tags"]
-        tags = @novel_data["tags"]
+      if @options["add-dc-subject-to-epub"] && novel_data && novel_data["tags"]
+        tags = novel_data["tags"]
         if tags.is_a?(Array)
           # 除外タグの設定を取得
           exclude_tags_setting = @options["dc-subject-exclude-tags"]
@@ -346,26 +423,27 @@ module Command
       
       # EPUB生成（dc:subject 挿入を含む）
       # ZIPも生成する場合(cleanup_tempの影響を避けるため)は一旦txtのクリーンアップを抑止
-      no_cleanup_txt = (@argument_target_type == :file) || @options["make-zip"]
-      ebook_path = NovelConverter.convert_txt_to_ebook_file(@converted_txt_path, {
-        use_dakuten_font: @use_dakuten_font,
-        device: @device,
+      no_cleanup_txt = (argument_target_type == :file) || @options["make-zip"]
+      ebook_path = NovelConverter.convert_txt_to_ebook_file(converted_txt_path, {
+        use_dakuten_font: use_dakuten_font,
+        device: device,
         verbose: @options["verbose"],
         no_epub: @options["no-epub"],
         no_mobi: @options["no-mobi"],
         no_strip: @options["no-strip"],
         no_cleanup_txt: no_cleanup_txt,
-        yokogaki: @options["yokogaki"],
-        dc_subjects: dc_subjects
+        yokogaki: @options["yokogaki"], # Note: This might be nil if not set in convert_novel_main for file target
+        dc_subjects: dc_subjects,
+        stream_io: io
       })
       # その他の処理 -> EPUBタグ挿入処理(有効時) -> ZIP作成処理(有効時)
       # ZIP作成はEPUB生成の成否に依存させない（TXTから生成するため）
       if @options["make-zip"] && !@options["no-zip"]
         begin
-          zip_path = generate_ibunko_zip
-          copy_to_converted_zip_file(zip_path, io: stream_io) if zip_path
+          zip_path = generate_ibunko_zip(device, io)
+          copy_to_converted_zip_file(zip_path, io: io) if zip_path
         rescue => e
-          $stdout2.error "ZIP生成に失敗しました: #{e.message}"
+          io.error "ZIP生成に失敗しました: #{e.message}"
         end
       end
       ebook_path
@@ -374,11 +452,25 @@ module Command
     #
     # i文庫用ZIP生成を明示的に実行する
     #
-    def generate_ibunko_zip
-      prev_device = @device
+    def generate_ibunko_zip(device, io)
+      # prev_device = @device # Don't touch instance var
+      # ibunko_device = Narou.get_device("ibunko")
+      # @device = ibunko_device # Don't touch instance var
+      
+      # フック処理はインスタンス変数に依存している可能性が高いが、
+      # ここでは新しいメソッドシグネチャを使用するようフック側も変更が必要かもしれない。
+      # しかし、Device::Ibunkoの実装を見ると...
+      # Device::Ibunko#create_pure_aozora_zip は self.device を参照する？
+      # Device::Ibunko は Mixin ではない。
+      # hook_convert_txt_to_ebook_file は extend されたモジュールにある。
+      # フック内では self.device を参照している可能性がある。
+      # self.device は attr_accessor :device なので、
+      # 一時的に self.device を書き換えるのはスレッドローカルなインスタンスなら安全。
+      
+      prev_device = self.device
       ibunko_device = Narou.get_device("ibunko")
-      # デバイス情報を一時的に差し替えてフック処理を使う
-      @device = ibunko_device
+      self.device = ibunko_device
+      
       # 純青空テキストからのZIP生成（EPUB最適化要素を除去）
       if Device::Ibunko.instance_methods(false).include?(:create_pure_aozora_zip)
         Device::Ibunko.instance_method(:create_pure_aozora_zip).bind(self).call
@@ -387,7 +479,7 @@ module Command
         Device::Ibunko.instance_method(:hook_convert_txt_to_ebook_file).bind(self).call { ->{} }
       end
     ensure
-      @device = prev_device
+      self.device = prev_device
     end
 
     class NoSuchDirectory < StandardError; end
@@ -395,9 +487,9 @@ module Command
     #
     # convert.copy-to で指定されたディレクトリに書籍データをコピーする
     #
-    def copy_to_converted_file(src_path, io: nil)
+    def copy_to_converted_file(src_path, device, novel_data, io: nil)
       io ||= (respond_to?(:stream_io) ? stream_io : nil) || $stdout2
-      copy_to_dir = get_copy_to_directory
+      copy_to_dir = get_copy_to_directory(device, novel_data)
       return nil unless copy_to_dir
       FileUtils.copy(src_path, copy_to_dir)
       copied_file_path = File.join(copy_to_dir, File.basename(src_path))
@@ -414,7 +506,7 @@ module Command
     # copy-to が設定されていなければ nil を返す。
     # copy-to が存在しないディレクトリだった場合は例外を投げる
     #
-    def get_copy_to_directory
+    def get_copy_to_directory(device, novel_data)
       # 2.1.0 から convert.copy_to から convert.copy-to へ名称が変更された
       # (互換性維持のため、copy_to も使えるようにはしておく)
       copy_to_dir = @options["copy-to"] || @options["copy_to"]
@@ -425,11 +517,11 @@ module Command
 
       dirs = [copy_to_dir]
       gvalues = grouping_values
-      if gvalues.device && @device
-        dirs << @device.display_name
+      if gvalues.device && device && device.display_name
+        dirs << device.display_name
       end
-      if gvalues.site && @novel_data
-        dirs << @novel_data["sitename"]
+      if gvalues.site && novel_data && novel_data["sitename"]
+        dirs << novel_data["sitename"]
       end
       copy_to_dir_with_groups = File.join(dirs)
       unless File.directory?(copy_to_dir_with_groups)
@@ -473,18 +565,18 @@ module Command
       result
     end
 
-    def send_file_to_device(ebook_file, io: $stdout2)
-      if @device && @device.physical_support? &&
-        @device.connecting? && File.extname(ebook_file) == @device.ebook_file_ext
-        if @argument_target_type == :novel
-          if Send.execute!(@device.name, @target, io: io) > 0
+    def send_file_to_device(ebook_file, target, device, argument_target_type, io: $stdout2)
+      if device && device.physical_support? &&
+        device.connecting? && File.extname(ebook_file) == device.ebook_file_ext
+        if argument_target_type == :novel
+          if Send.execute!(device.name, target, io: io) > 0
             @@sending_error_list << ebook_file
           end
         else
-          io.puts @device.name + "へ送信しています"
+          io.puts device.name + "へ送信しています"
           copy_to_path = nil
           begin
-            copy_to_path = @device.copy_to_documents(ebook_file)
+            copy_to_path = device.copy_to_documents(ebook_file)
           rescue Device::SendFailure
           end
           if copy_to_path
