@@ -90,3 +90,9 @@ input, textarea, [contenteditable="true"], .tag[data-tag] {
   -ms-user-select: text !important;
   user-select: text !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Default theme) */
+.dt-button-collection button:hover {
+  background-color: #f5f5f5 !important;
+  color: #333 !important;
+}

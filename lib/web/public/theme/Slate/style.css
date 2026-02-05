@@ -37,3 +37,9 @@
 .queue.active .queue__sizes {
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Slate theme) */
+.dt-button-collection button:hover {
+  background-color: #272b2e !important;
+  color: #fff !important;
+}

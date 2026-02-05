@@ -45,3 +45,9 @@
 .queue.active .queue__sizes {
   background-color: yellow !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (United theme) */
+.dt-button-collection button:hover {
+  background-color: #f5f5f5 !important;
+  color: #333 !important;
+}
