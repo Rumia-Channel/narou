@@ -47,7 +47,19 @@
 }
 
 /* DataTables Buttons - Column Visibility Dialog (United theme) */
-.dt-button-collection button:hover {
+.dt-button-collection,
+.dt-colvis-menu {
+  background-color: #fff !important;
+  color: #333 !important;
+}
+
+.dt-button-collection button,
+.dt-colvis-menu button {
+  color: #333 !important;
+}
+
+.dt-button-collection button:hover,
+.dt-colvis-menu button:hover {
   background-color: #f5f5f5 !important;
   color: #333 !important;
 }
