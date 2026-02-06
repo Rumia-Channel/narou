@@ -724,7 +724,7 @@ class Narou::AppServer < Sinatra::Base
     else
       # キャッシュが無い場合は新規作成
       database_values = Database.instance.get_object.values
-      cached_data = database_values.map do |data|
+      cached_data = database_values.compact.map do |data|
         id = data["id"]
         is_frozen = Narou.novel_frozen?(id)
         tags = data["tags"] || []
@@ -968,7 +968,7 @@ class Narou::AppServer < Sinatra::Base
     else
       # APIキャッシュが無い場合は新規作成
       database_values = Database.instance.get_object.values
-      cached_data = database_values.map do |data|
+      cached_data = database_values.compact.map do |data|
         id = data["id"]
         is_frozen = Narou.novel_frozen?(id)
         tags = data["tags"] || []
