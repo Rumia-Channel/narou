@@ -1650,6 +1650,23 @@ class Narou::AppServer < Sinatra::Base
     json res
   end
 
+  get "/api/get_pending_tasks" do
+    pending = Narou::PersistentQueue.get_pending_tasks
+    running = Narou::PersistentQueue.get_running_tasks
+    json({
+      pending: pending,
+      running: running,
+      pending_count: pending.size,
+      running_count: running.size
+    })
+  end
+
+  post "/api/confirm_running_tasks" do
+    rerun = params["rerun"] == "true"
+    Narou::WebWorker.instance.process_confirmed_running_tasks(rerun: rerun)
+    json({ status: "ok" })
+  end
+
   post "/api/update_general_lastup" do
     option = params["option"]
     option = nil if option == "all"

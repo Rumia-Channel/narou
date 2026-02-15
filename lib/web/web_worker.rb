@@ -28,6 +28,44 @@ module Narou
       @push_server = Narou::PushServer.instance
       @cancel_signal = false
       @thread_of_block_executing = nil
+      @pending_running_tasks = []
+      @waiting_confirmation = false
+    end
+
+    def waiting_confirmation?
+      @waiting_confirmation
+    end
+
+    def get_pending_running_tasks
+      @pending_running_tasks.dup
+    end
+
+    def process_confirmed_running_tasks(rerun: true)
+      tasks_to_process = @mutex.synchronize do
+        tasks = @pending_running_tasks
+        @pending_running_tasks = []
+        @waiting_confirmation = false
+        tasks
+      end
+
+      if rerun
+        tasks_to_process.each do |task|
+          cmd = task["cmd"]
+          args = task["args"] || []
+          meta = task["meta"] || {}
+          puts "<yellow>[復元] 中断タスクを再実行します: #{cmd} #{args.join(' ')}</yellow>".termcolor
+          block = build_block_from_task(cmd, args, meta)
+          if block
+            push_command(cmd, args, meta, &block)
+          else
+            PersistentQueue.complete(task["id"])
+          end
+        end
+      else
+        tasks_to_process.each do |task|
+          PersistentQueue.complete(task["id"])
+        end
+      end
     end
 
     def running?
@@ -168,7 +206,7 @@ module Narou
       instance.restore_and_execute_pending_tasks
     end
 
-    def restore_and_execute_pending_tasks
+    def restore_and_execute_pending_tasks(confirm_running: false)
       tasks = PersistentQueue.restore
       running_tasks = tasks.select { |t| t["status"] == "running" }
       pending_tasks = tasks.select { |t| t["status"] == "pending" }
@@ -179,9 +217,14 @@ module Narou
 
       return 0 if total_count.zero?
 
-      running_tasks.each do |task|
-        PersistentQueue.start(task["id"])
-        PersistentQueue.complete(task["id"])
+      if running_count > 0
+        @mutex.synchronize do
+          @pending_running_tasks = running_tasks
+          @waiting_confirmation = true
+        end
+        @push_server.send_all("queue.pending_running_tasks" => running_tasks)
+        rerun_running = confirm_rerun_running_tasks(running_tasks)
+        process_confirmed_running_tasks(rerun: rerun_running)
       end
 
       pending_tasks.each do |task|
@@ -198,6 +241,19 @@ module Narou
       end
 
       total_count
+    end
+
+    def confirm_rerun_running_tasks(running_tasks)
+      puts "<yellow>前回中断されたタスクが#{running_tasks.size}件あります:</yellow>".termcolor
+      running_tasks.each do |task|
+        puts "  - #{task['cmd']} #{(task['args'] || []).join(' ')}".termcolor
+      end
+      print "<yellow>再実行しますか？ [Y/n]: </yellow>".termcolor
+
+      answer = $stdin.gets&.strip&.downcase
+      answer.nil? || answer.empty? || answer == 'y' || answer == 'yes'
+    rescue SystemCallError
+      true
     end
 
     def self.has_pending_tasks?
