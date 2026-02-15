@@ -7,6 +7,7 @@
 require "yaml"
 require "securerandom"
 require "monitor"
+require "fileutils"
 require_relative "narou"
 
 module Narou
@@ -206,7 +207,7 @@ module Narou
 
       begin
         dir = path.dirname
-        Dir.mkdir(dir) unless dir.exist?
+        FileUtils.mkdir_p(dir) unless dir.exist?
         File.write(path, data.to_yaml)
       rescue Errno::ENOENT, Errno::EACCES => e
         warn "[PersistentQueue] 保存エラー: #{e.message}"
