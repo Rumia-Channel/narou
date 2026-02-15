@@ -125,9 +125,18 @@ class Narou::AppServer < Sinatra::Base
   def initialize
     super
     puts_hello_messages
+    check_and_restore_pending_tasks
     start_device_ejectable_event
     fill_general_all_no_in_database
     setup_server_authentication
+  end
+
+  def check_and_restore_pending_tasks
+    return unless Narou::WebWorker.has_pending_tasks?
+    count = Narou::WebWorker.restore_and_execute_pending_tasks
+    if count > 0
+      puts "<yellow>前回未完了のタスクが#{count}件見つかりました。再実行します。</yellow>".termcolor
+    end
   end
 
   def puts_hello_messages
@@ -1202,25 +1211,26 @@ class Narou::AppServer < Sinatra::Base
     targets = targets.kind_of?(Array) ? targets : targets.split
     opt_mail = "--mail" if query_to_boolean(params["mail"])
     pass if targets.size == 0
-    Narou::WebWorker.push do
+    args = [targets, opt_mail].compact
+    Narou::WebWorker.push_command("download", args) do
       CommandLine.run!("download", targets, opt_mail)
-      Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+      Narou::AppServer.clear_all_cache
       @@push_server.send_all(:"table.reload")
     end
   end
 
   post "/api/download_force" do
     ids = select_valid_novel_ids(params["ids"]) or pass
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("download_force", [ids]) do
       CommandLine.run!("download", "--force", ids)
-      Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+      Narou::AppServer.clear_all_cache
       @@push_server.send_all(:"table.reload")
     end
   end
 
   post "/api/mail" do
     ids = select_valid_novel_ids(params["ids"]) || []
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("mail", [ids]) do
       Narou.concurrency_call do
         CommandLine.run!("mail", ids, io: $stdout2)
       end
@@ -1229,19 +1239,16 @@ class Narou::AppServer < Sinatra::Base
 
   post "/api/update" do
     if params["update_all"] == "true"
-      # 全件更新の場合 - 処理用完全IDリストを使用
       puts "[DEBUG] All novels update requested" if ENV["NAROU_DEBUG"] == "1"
-      
-      # 新しいキャッシュシステムで全IDを取得（現在のフィルター・ソート条件適用済み）
       sorted_ids = get_full_sorted_ids(params)
       puts "[DEBUG] Full sorted IDs for update: #{sorted_ids.length} items" if ENV["NAROU_DEBUG"] == "1"
       puts "[DEBUG] First 10 IDs: #{sorted_ids.first(10).inspect}" if ENV["NAROU_DEBUG"] == "1"
       
       opt_arguments = []
-      if params["force"] == "true"
-        opt_arguments << "--force"
-      end
-      Narou::WebWorker.push do
+      opt_arguments << "--force" if params["force"] == "true"
+      args = sorted_ids + opt_arguments
+      
+      Narou::WebWorker.push_command("update", args) do
         puts "<white>全ての小説の更新を開始します（#{sorted_ids.length}件を#{current_sort_display_string}で処理）</white>".termcolor
         cmd = Command.load_command("update").new
         if table_reload_timing == "every"
@@ -1250,11 +1257,10 @@ class Narou::AppServer < Sinatra::Base
           end
         end
         cmd.execute!(sorted_ids, opt_arguments)
-        Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+        Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
       end
     else
-      # 選択された小説のみ更新 - 処理用完全IDリストと照合
       selected_ids = select_valid_novel_ids(params["ids"]) || []
       puts "[DEBUG] Selected IDs from WebUI: #{selected_ids.inspect}" if ENV["NAROU_DEBUG"] == "1"
       
@@ -1263,11 +1269,9 @@ class Narou::AppServer < Sinatra::Base
         return
       end
       
-      # 処理用完全IDリストを取得（現在のフィルター・ソート条件適用済み）
       full_sorted_ids = get_full_sorted_ids(params)
       puts "[DEBUG] Full sorted IDs: #{full_sorted_ids.length} items" if ENV["NAROU_DEBUG"] == "1"
       
-      # 選択されたIDを完全リストの順序で並び替え
       sorted_ids = full_sorted_ids.select { |id| selected_ids.include?(id) }
       puts "[DEBUG] Final sorted IDs for update: #{sorted_ids.inspect}" if ENV["NAROU_DEBUG"] == "1"
       
@@ -1277,10 +1281,10 @@ class Narou::AppServer < Sinatra::Base
       end
       
       opt_arguments = []
-      if params["force"] == "true"
-        opt_arguments << "--force"
-      end
-      Narou::WebWorker.push do
+      opt_arguments << "--force" if params["force"] == "true"
+      args = sorted_ids + opt_arguments
+      
+      Narou::WebWorker.push_command("update", args) do
         puts "<white>更新を開始します（#{sorted_ids.length}件を#{current_sort_display_string}で処理）</white>".termcolor
         cmd = Command.load_command("update").new
         if table_reload_timing == "every"
@@ -1289,7 +1293,7 @@ class Narou::AppServer < Sinatra::Base
           end
         end
         cmd.execute!(sorted_ids, opt_arguments)
-        Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+        Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
       end
     end
@@ -1305,7 +1309,7 @@ class Narou::AppServer < Sinatra::Base
       "^tag:#{tag}"
     end
     pass if tag_params.empty?
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("update_by_tag", tag_params) do
       cmd = Command.load_command("update").new
       if table_reload_timing == "every"
         cmd.on(:success) do
@@ -1313,14 +1317,14 @@ class Narou::AppServer < Sinatra::Base
         end
       end
       cmd.execute!(tag_params)
-      Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+      Narou::AppServer.clear_all_cache
       @@push_server.send_all(:"table.reload")
     end
   end
 
   post "/api/send" do
     ids = select_valid_novel_ids(params["ids"]) || []
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("send", [ids]) do
       Narou.concurrency_call do
         CommandLine.run!("send", ids, io: $stdout2)
       end
@@ -1328,7 +1332,7 @@ class Narou::AppServer < Sinatra::Base
   end
 
   post "/api/backup_bookmark" do
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("backup_bookmark", []) do
       CommandLine.run!("send", "--backup-bookmark")
     end
   end
@@ -1336,7 +1340,7 @@ class Narou::AppServer < Sinatra::Base
   post "/api/freeze" do
     begin
       ids = select_valid_novel_ids(params["ids"]) or halt(400, json({ error: "小説が選択されていません" }))
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("freeze", [ids]) do
         CommandLine.run!("freeze", ids)
         Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
@@ -1352,7 +1356,7 @@ class Narou::AppServer < Sinatra::Base
   post "/api/freeze_on" do
     begin
       ids = select_valid_novel_ids(params["ids"]) or halt(400, json({ error: "小説が選択されていません" }))
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("freeze", ["--on", ids]) do
         CommandLine.run!("freeze", "--on", ids)
         Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
@@ -1368,7 +1372,7 @@ class Narou::AppServer < Sinatra::Base
   post "/api/freeze_off" do
     begin
       ids = select_valid_novel_ids(params["ids"]) or halt(400, json({ error: "小説が選択されていません" }))
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("freeze", ["--off", ids]) do
         CommandLine.run!("freeze", "--off", ids)
         Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
@@ -1400,8 +1404,9 @@ class Narou::AppServer < Sinatra::Base
     end
     
     debug_puts "[DEBUG] Remove processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
+    args = ["--yes"] + sorted_ids + opt_arguments
     begin
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("remove", args) do
         begin
           CommandLine.run!("remove", "--yes", sorted_ids, opt_arguments)
           @@push_server.send_all(:"table.reload")
@@ -1431,7 +1436,7 @@ class Narou::AppServer < Sinatra::Base
     
     debug_puts "[DEBUG] Remove with file processing #{sorted_ids.length} novels: #{sorted_ids.inspect}"
     begin
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("remove", ["--yes", "--with-file", sorted_ids]) do
         begin
           CommandLine.run!("remove", "--yes", "--with-file", sorted_ids)
           @@push_server.send_all(:"table.reload")
@@ -1450,10 +1455,8 @@ class Narou::AppServer < Sinatra::Base
     ids = select_valid_novel_ids(params["ids"]) or pass
     number = params["number"] || "1"
     disabled_log_io = $stdout.dup_with_disabled_logging
-    Narou::WebWorker.push do
-      # diff コマンドは１度に一つのIDしか受け取らないので一つずつ表示する
+    Narou::WebWorker.push_command("diff", [ids, number]) do
       ids.each do |id|
-        # セキュリティ的にWEB UIでは独自の差分表示のみ使う
         CommandLine.run!("diff", "--no-tool", id, "--number", number)
         Helper.print_horizontal_rule(disabled_log_io)
       end
@@ -1470,14 +1473,14 @@ class Narou::AppServer < Sinatra::Base
   post "/api/diff_clean" do
     target = params["target"] or pass
     id = Downloader.get_id_by_target(target) or pass
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("diff_clean", [id]) do
       CommandLine.run!("diff", "--clean", id)
     end
   end
 
   post "/api/inspect" do
     ids = select_valid_novel_ids(params["ids"]) or pass
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("inspect", [ids]) do
       CommandLine.run!("inspect", ids)
     end
   end
@@ -1489,7 +1492,7 @@ class Narou::AppServer < Sinatra::Base
 
   post "/api/backup" do
     ids = select_valid_novel_ids(params["ids"]) or pass
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("backup", [ids]) do
       CommandLine.run!("backup", ids)
     end
   end
@@ -1651,15 +1654,15 @@ class Narou::AppServer < Sinatra::Base
     option = params["option"]
     option = nil if option == "all"
     is_update_modified = params["is_update_modified"] == "true"
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("update_general_lastup", [option].compact) do
       CommandLine.run!(["update", "--gl", option].compact)
-      Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+      Narou::AppServer.clear_all_cache
       @@push_server.send_all(:"table.reload")
       @@push_server.send_all(:"tag.updateCanvas")
       if is_update_modified
         puts "<yellow>#{Narou::MODIFIED_TAG} タグの付いた小説を更新します</yellow>".termcolor
         CommandLine.run!("update", "tag:#{Narou::MODIFIED_TAG}")
-        Narou::AppServer.clear_all_cache # 全キャッシュ無効化
+        Narou::AppServer.clear_all_cache
         @@push_server.send_all(:"table.reload")
         @@push_server.send_all(:"tag.updateCanvas")
       end
@@ -1668,7 +1671,7 @@ class Narou::AppServer < Sinatra::Base
 
   post "/api/setting_burn" do
     ids = select_valid_novel_ids(params["ids"]) or pass
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("setting_burn", [ids]) do
       CommandLine.run!("setting", "--burn", ids)
     end
   end
@@ -1724,18 +1727,16 @@ class Narou::AppServer < Sinatra::Base
     end
   end
 
-  # ダウンロード登録すると同時にグレーのボタン画像を返す
   get "/api/download4ssl" do
     target = params["target"] or error("need a parameter: `target'")
     opt_mail = "--mail" if query_to_boolean(params["mail"])
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("download", [target, opt_mail].compact) do
       CommandLine.run!("download", target, opt_mail)
       @@push_server.send_all(:"table.reload")
     end
     redirect "/resources/images/dl_button1.gif"
   end
 
-  # 外部APIからのダウンロード登録（JSON形式でレスポンス）
   get "/api/download_request" do
     target = params["target"] or error("need a parameter: `target'")
     opt_mail = "--mail" if query_to_boolean(params["mail"])
@@ -1746,7 +1747,7 @@ class Narou::AppServer < Sinatra::Base
     if already_exists
       { status: 1, id: already_exists }.to_json
     else
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("download", [target, opt_mail].compact) do
         CommandLine.run!("download", target, opt_mail)
         @@push_server.send_all(:"table.reload")
       end
@@ -1808,7 +1809,7 @@ class Narou::AppServer < Sinatra::Base
       end
     end
     if params["enqueue"] == "true"
-      Narou::WebWorker.push do
+      Narou::WebWorker.push_command("eject", []) do
         Narou.concurrency_call(&do_eject)
       end
     else
@@ -1870,7 +1871,7 @@ class Narou::AppServer < Sinatra::Base
   get "/widget/download" do
     target = params["target"] or error("targetを指定して下さい")
     mail = query_to_boolean(params["mail"]) ? "--mail" : nil
-    Narou::WebWorker.push do
+    Narou::WebWorker.push_command("download", [target, mail].compact) do
       CommandLine.run!("download", target, mail)
       @@push_server.send_all(:"table.reload")
     end
