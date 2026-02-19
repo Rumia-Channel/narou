@@ -182,7 +182,7 @@ module Narou
       return unless path && File.exist?(path)
 
       begin
-        data = YAML.safe_load_file(path, permitted_classes: [Time])
+        data = YAML.safe_load_file(path, permitted_classes: [Time], aliases: true)
         if data.is_a?(Hash)
           @pending = Array(data["pending"]).select { |t| valid_task?(t) }
           @running = Array(data["running"]).select { |t| valid_task?(t) }
