@@ -170,7 +170,14 @@ module Command
       STDERR.puts "[DEBUG] 8. before AppServer.run!"
 
       puts "[DEBUG] Starting AppServer..."
-      Narou::AppServer.run!
+      begin
+        server = Narou::AppServer.run!
+        wait_for_appserver(server)
+      rescue => e
+        STDERR.puts "[ERROR] AppServer.run! raised: #{e.class}: #{e.message}"
+        STDERR.puts e.backtrace.first(10).join("\n")
+        raise
+      end
       puts "[DEBUG] AppServer exited!"
 
       # 自動アップデートスケジューラーを停止
@@ -222,6 +229,16 @@ module Command
 
     def worker_available?
       defined?(Narou::Worker)
+    end
+
+    # Puma handler may return immediately in non-interactive environments.
+    # If run! returns, keep the process alive while the app server is running.
+    def wait_for_appserver(server)
+      if server.respond_to?(:join)
+        server.join
+      elsif Narou::AppServer.respond_to?(:running?) && Narou::AppServer.running?
+        sleep 0.2 while Narou::AppServer.running?
+      end
     end
 
     def load_web_dependencies

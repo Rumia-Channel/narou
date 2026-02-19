@@ -47,7 +47,7 @@ class Narou::AppServer < Sinatra::Base
 
     set :environment, :production unless $development
     set :server, :puma
-    set :server_settings, { Silent: true, Threads: "0:#{Etc.nprocessors * 2}" }
+    set :server_settings, { Silent: false, Threads: "0:#{Etc.nprocessors * 2}" }
 
     if $debug
       use BetterErrors::Middleware
