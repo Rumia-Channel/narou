@@ -161,7 +161,9 @@ module Command
       require_relative "update/scheduler"
       Command.load_command("update")::Scheduler.start
 
+      puts "[DEBUG] Starting AppServer..."
       Narou::AppServer.run!
+      puts "[DEBUG] AppServer exited!"
 
       # 自動アップデートスケジューラーを停止
       Command.load_command("update")::Scheduler.stop
