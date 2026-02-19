@@ -140,26 +140,34 @@ module Command
       puts "サーバを止めるには Ctrl+C を入力"
       puts
 
+      STDERR.puts "[DEBUG] 1. push_server.run start"
       push_server.run
+      STDERR.puts "[DEBUG] 2. push_server.run done"
       open_browser_when_server_boot(address)
       send_rebooted_event_when_connection_recover(push_server)
 
+      STDERR.puts "[DEBUG] 3. before $stdout reassign"
       $stdout = Narou::StreamingLogger.new(push_server)
       $stdout2 = if Inventory.load["concurrency"]
                    Narou::StreamingLogger.new(push_server, $stdout2, target_console: "stdout2")
                  else
                    $stdout
                  end
+      STDERR.puts "[DEBUG] 4. after $stdout reassign"
       ProgressBar.push_server = push_server
       if worker_available?
         Narou::Worker.push_server = push_server
       end
       Narou::AppServer.push_server = push_server
+      STDERR.puts "[DEBUG] 5. before WebWorker.run"
       Narou::WebWorker.run
+      STDERR.puts "[DEBUG] 6. after WebWorker.run"
 
       # 自動アップデートスケジューラーを開始
       require_relative "update/scheduler"
+      STDERR.puts "[DEBUG] 7. before Scheduler.start"
       Command.load_command("update")::Scheduler.start
+      STDERR.puts "[DEBUG] 8. before AppServer.run!"
 
       puts "[DEBUG] Starting AppServer..."
       Narou::AppServer.run!
