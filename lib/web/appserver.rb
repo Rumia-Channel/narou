@@ -1657,7 +1657,8 @@ class Narou::AppServer < Sinatra::Base
       pending: pending,
       running: running,
       pending_count: pending.size,
-      running_count: running.size
+      running_count: running.size,
+      waiting_confirmation: Narou::WebWorker.instance.waiting_confirmation?
     })
   end
 
