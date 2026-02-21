@@ -43,6 +43,14 @@ module Narou
         instance.complete(task_id)
       end
 
+      def requeue(task_id)
+        instance.requeue(task_id)
+      end
+
+      def discard(task_id)
+        instance.discard(task_id)
+      end
+
       def get_pending_tasks
         instance.get_pending_tasks
       end
@@ -125,6 +133,41 @@ module Narou
           @running.delete(task)
           task["status"] = STATUS_COMPLETED
           task["completed_at"] = Time.now.iso8601
+          @running_count = @running.size
+          save_to_file
+          true
+        else
+          false
+        end
+      end
+    end
+
+    def requeue(task_id)
+      synchronize do
+        task = @running.find { |t| t["id"] == task_id }
+        if task
+          @running.delete(task)
+          task["status"] = STATUS_PENDING
+          task.delete("started_at")
+          @pending << task
+          @pending_count = @pending.size
+          @running_count = @running.size
+          save_to_file
+          true
+        else
+          false
+        end
+      end
+    end
+
+    def discard(task_id)
+      synchronize do
+        pending_task = @pending.find { |t| t["id"] == task_id }
+        running_task = @running.find { |t| t["id"] == task_id }
+        if pending_task || running_task
+          @pending.delete(pending_task) if pending_task
+          @running.delete(running_task) if running_task
+          @pending_count = @pending.size
           @running_count = @running.size
           save_to_file
           true

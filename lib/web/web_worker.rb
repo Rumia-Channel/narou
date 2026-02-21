@@ -56,9 +56,10 @@ module Narou
           puts "<yellow>[復元] 中断タスクを再実行します: #{cmd} #{args.join(' ')}</yellow>".termcolor
           block = build_block_from_task(cmd, args, meta)
           if block
-            push_command(cmd, args, meta, &block)
+            PersistentQueue.requeue(task["id"])
+            enqueue_restored_task(task, &block)
           else
-            PersistentQueue.complete(task["id"])
+            PersistentQueue.discard(task["id"])
           end
         end
       else
@@ -234,9 +235,9 @@ module Narou
         puts "<yellow>[復元] タスクを再実行します: #{cmd} #{args.join(' ')}</yellow>".termcolor
         block = build_block_from_task(cmd, args, meta)
         if block
-          push_command(cmd, args, meta, &block)
+          enqueue_restored_task(task, &block)
         else
-          PersistentQueue.complete(task["id"])
+          PersistentQueue.discard(task["id"])
         end
       end
 
@@ -261,6 +262,18 @@ module Narou
     end
 
     private
+
+    def enqueue_restored_task(task, &block)
+      countup
+      @queue.push(
+        block: block,
+        task_id: task["id"],
+        counting: true,
+        cmd: task["cmd"],
+        args: task["args"] || [],
+        meta: task["meta"] || {}
+      )
+    end
 
     #
     # タスク情報から実行ブロックを再構築
