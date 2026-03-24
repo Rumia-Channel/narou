@@ -1,6 +1,7 @@
 require "time"
 require "thread"
 require_relative "../../inventory"
+require_relative "../../web/server_helpers"
 
 module Command
   class Update
@@ -129,11 +130,10 @@ module Command
                 update_command = Command::Update.new
                 
                 server_setting = Inventory.load("server_setting", :global)
-                current_sort = server_setting["current_sort"]
-                if current_sort && current_sort["column"] && current_sort["dir"]
-                  column_names = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"]
-                  sort_column = column_names[current_sort["column"]]
-                  if sort_column && ["id", "last_update", "general_lastup", "last_check_date"].include?(sort_column)
+                current_sort = Narou::ServerHelpers.normalize_sort_state(server_setting["current_sort"])
+                if current_sort
+                  sort_column = Narou::ServerHelpers.sort_column_name(current_sort)
+                  if ["id", "last_update", "general_lastup", "last_check_date"].include?(sort_column)
                     argv_with_sort = ["--sort-by", sort_column]
                     puts "自動アップデート: WebUIソート設定を適用 (#{sort_column} #{current_sort["dir"]})"
                   else
