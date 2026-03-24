@@ -20,9 +20,6 @@ Encoding.default_external = Encoding::UTF_8
 Gem::Specification.new do |gem|
   gem.name          = "narou"
   gem.version       = ::Narou::VERSION
-  if is_windows
-      gem.platform  = Gem::Platform::CURRENT
-  end
   gem.license       = "MIT"
   gem.authors       = ["whiteleaf7 (original)", "Rumia-Channel (maintainer)", "ponponusa (fork from)"]
   gem.email         = ["github@rumia-ch.uk"]

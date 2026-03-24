@@ -140,36 +140,36 @@ module Command
       puts "サーバを止めるには Ctrl+C を入力"
       puts
 
-      STDERR.puts "[DEBUG] 1. push_server.run start"
+      debug_log("push_server.run start")
       push_server.run
-      STDERR.puts "[DEBUG] 2. push_server.run done"
+      debug_log("push_server.run done")
       open_browser_when_server_boot(address)
       send_rebooted_event_when_connection_recover(push_server)
 
-      STDERR.puts "[DEBUG] 3. before $stdout reassign"
+      debug_log("before $stdout reassign")
       $stdout = Narou::StreamingLogger.new(push_server)
       $stdout2 = if Inventory.load["concurrency"]
                    Narou::StreamingLogger.new(push_server, $stdout2, target_console: "stdout2")
                  else
                    $stdout
                  end
-      STDERR.puts "[DEBUG] 4. after $stdout reassign"
+      debug_log("after $stdout reassign")
       ProgressBar.push_server = push_server
       if worker_available?
         Narou::Worker.push_server = push_server
       end
       Narou::AppServer.push_server = push_server
-      STDERR.puts "[DEBUG] 5. before WebWorker.run"
+      debug_log("before WebWorker.run")
       Narou::WebWorker.run
-      STDERR.puts "[DEBUG] 6. after WebWorker.run"
+      debug_log("after WebWorker.run")
 
       # 自動アップデートスケジューラーを開始
       require_relative "update/scheduler"
-      STDERR.puts "[DEBUG] 7. before Scheduler.start"
+      debug_log("before Scheduler.start")
       Command.load_command("update")::Scheduler.start
-      STDERR.puts "[DEBUG] 8. before AppServer.run!"
+      debug_log("before AppServer.run!")
 
-      puts "[DEBUG] Starting AppServer..."
+      debug_log("Starting AppServer...")
       begin
         server = Narou::AppServer.run!
         wait_for_appserver(server)
@@ -178,7 +178,7 @@ module Command
         STDERR.puts e.backtrace.first(10).join("\n")
         raise
       end
-      puts "[DEBUG] AppServer exited!"
+      debug_log("AppServer exited!")
 
       # 自動アップデートスケジューラーを停止
       Command.load_command("update")::Scheduler.stop
@@ -248,6 +248,10 @@ module Command
       require_relative "../database"
       require_relative "../html"
       require_relative "../web/all"
+    end
+
+    def debug_log(message)
+      STDERR.puts "[DEBUG] #{message}" if ENV["NAROU_DEBUG"] == "1"
     end
 
   end
