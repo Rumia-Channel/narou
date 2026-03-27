@@ -54,7 +54,7 @@ class Mailer
   end
 
   def send(id, message, attached_file_path = nil)
-    gem "mail", "2.6.6"
+    gem "mail", "2.9.0"
     require "pony"
     @error_message = ""
     params = @options.dup

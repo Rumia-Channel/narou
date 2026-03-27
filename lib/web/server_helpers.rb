@@ -8,6 +8,8 @@
 
 module Narou::ServerHelpers
   RELOAD_TIMING_DEFAULT = "every"
+  SORT_COLUMN_KEYS = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"].freeze
+  SORT_COLUMN_LABELS = ["ID", "最終更新日", "最新話掲載日", "最終確認日", "タイトル", "作者", "サイト名", "小説種別", "タグ", "話数", "文字数", "状態", "URL"].freeze
 
   #
   # タグをHTMLで装飾する
@@ -67,61 +69,13 @@ module Narou::ServerHelpers
   def sort_ids_by_current_sort(ids)
     debug_puts "[DEBUG] sort_ids_by_current_sort called with #{ids ? ids.length : 0} IDs: #{ids.inspect}"
     return ids unless ids && ids.length > 0
-    
+
     server_setting = Inventory.load("server_setting", :global)
     current_sort = server_setting["current_sort"]
     debug_puts "[DEBUG] Current sort from server: #{current_sort.inspect}"
-    return ids unless current_sort
-    
-    order_column = current_sort["column"]
-    order_dir = current_sort["dir"]
-    debug_puts "[DEBUG] Sort params: column=#{order_column}, dir=#{order_dir}"
-    return ids unless order_column && order_dir
-    
-    column_names = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"]
-    sort_column = column_names[order_column]
-    debug_puts "[DEBUG] Sort column: #{sort_column}"
-    return ids unless sort_column
-    
-    # IDから小説データを取得してソート
-    database = Database.instance
-    novels_data = ids.map do |id|
-      data = database[id.to_i]
-      if data
-        debug_puts "[DEBUG] Found data for ID #{id}"
-      else
-        debug_puts "[DEBUG] ID #{id}: not found"
-      end
-      data ? [id, data] : nil
-    end.compact
-    
-    debug_puts "[DEBUG] Found #{novels_data.length} novels with data"
-    
-    # ソート実行
-    debug_puts "[DEBUG] Before sort: #{novels_data.map{|n| [n[0], n[1][sort_column]]}.inspect}"
-    
-    novels_data.sort! do |a, b|
-      # データベースのHashは文字列キーを使用
-      val_a = a[1][sort_column] || 0
-      val_b = b[1][sort_column] || 0
-      
-      debug_puts "[DEBUG] Comparing ID #{a[0]} (#{val_a}) vs ID #{b[0]} (#{val_b})"
-      
-      if val_a.is_a?(Numeric) && val_b.is_a?(Numeric)
-        comparison = val_a <=> val_b
-      else
-        comparison = val_a.to_s <=> val_b.to_s
-      end
-      
-      result = order_dir == "desc" ? -comparison : comparison
-      debug_puts "[DEBUG] Comparison result: #{result} (#{order_dir})"
-      result
-    end
-    
-    debug_puts "[DEBUG] After sort: #{novels_data.map{|n| [n[0], n[1][sort_column]]}.inspect}"
-    
-    # ソート済みのIDのみを返す
-    sorted_ids = novels_data.map { |novel| novel[0] }
+    normalized_sort = normalize_sort_state(current_sort)
+    debug_puts "[DEBUG] Normalized current sort: #{normalized_sort.inspect}"
+    sorted_ids = sort_ids_with_state(ids, normalized_sort)
     debug_puts "[DEBUG] Sorted IDs: #{sorted_ids.inspect}"
     sorted_ids
   end
@@ -133,43 +87,9 @@ module Narou::ServerHelpers
     debug_puts "[DEBUG] sort_ids_with_fixed_state called with #{ids ? ids.length : 0} IDs"
     debug_puts "[DEBUG] Fixed sort state: #{sort_state.inspect}"
     return ids unless ids && ids.length > 0
-    return ids unless sort_state
-    
-    order_column = sort_state["column"]
-    order_dir = sort_state["dir"]
-    debug_puts "[DEBUG] Fixed sort params: column=#{order_column}, dir=#{order_dir}"
-    return ids unless order_column && order_dir
-    
-    column_names = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"]
-    sort_column = column_names[order_column.to_i]
-    debug_puts "[DEBUG] Fixed sort column: #{sort_column}"
-    return ids unless sort_column
-    
-    # IDから小説データを取得してソート（convert実行時点のデータを取得）
-    database = Database.instance
-    novels_data = ids.map do |id|
-      data = database[id.to_i]
-      data ? [id, data.dup] : nil  # データをコピーして固定化
-    end.compact
-    
-    debug_puts "[DEBUG] Found #{novels_data.length} novels with data for fixed sort"
-    
-    # ソート実行（固定されたソート条件で）
-    novels_data.sort! do |a, b|
-      val_a = a[1][sort_column] || 0
-      val_b = b[1][sort_column] || 0
-      
-      if val_a.is_a?(Numeric) && val_b.is_a?(Numeric)
-        comparison = val_a <=> val_b
-      else
-        comparison = val_a.to_s <=> val_b.to_s
-      end
-      
-      order_dir == "desc" ? -comparison : comparison
-    end
-    
-    # ソート済みのIDのみを返す
-    sorted_ids = novels_data.map { |novel| novel[0] }
+    normalized_sort = normalize_sort_state(sort_state)
+    debug_puts "[DEBUG] Normalized fixed sort: #{normalized_sort.inspect}"
+    sorted_ids = sort_ids_with_state(ids, normalized_sort, duplicate_values: true)
     debug_puts "[DEBUG] Fixed sorted IDs: #{sorted_ids.inspect}"
     sorted_ids
   end
@@ -179,21 +99,103 @@ module Narou::ServerHelpers
   #
   def current_sort_display_string
     server_setting = Inventory.load("server_setting", :global)
-    current_sort = server_setting["current_sort"]
+    current_sort = normalize_sort_state(server_setting["current_sort"])
     return "ID順" unless current_sort
-    
-    order_column = current_sort["column"]
-    order_dir = current_sort["dir"]
-    return "ID順" unless order_column && order_dir
-    
-    column_names = ["ID", "最終更新日", "最新話掲載日", "最終確認日", "タイトル", "作者", "サイト名", "小説種別", "タグ", "話数", "文字数", "状態", "URL"]
-    column_display = column_names[order_column] || "不明"
-    dir_display = order_dir == "desc" ? "降順" : "昇順"
-    
+
+    column_display = sort_column_label(current_sort) || "不明"
+    dir_display = current_sort["dir"] == "desc" ? "降順" : "昇順"
+
     "#{column_display}#{dir_display}"
   end
 
   private
+
+  def normalize_sort_state(sort_state)
+    return nil unless sort_state.is_a?(Hash)
+
+    order_column = sort_state["column"] || sort_state[:column]
+    order_dir = sort_state["dir"] || sort_state[:dir]
+    return nil if order_column.nil? || order_dir.nil?
+
+    column_index = normalize_sort_column(order_column)
+    return nil unless column_index
+
+    direction = order_dir.to_s
+    return nil unless %w[asc desc].include?(direction)
+
+    {
+      "column" => column_index,
+      "dir" => direction
+    }
+  end
+  module_function :normalize_sort_state
+
+  def sort_column_name(sort_state)
+    normalized_sort = normalize_sort_state(sort_state)
+    return nil unless normalized_sort
+
+    SORT_COLUMN_KEYS[normalized_sort["column"]]
+  end
+  module_function :sort_column_name
+
+  def sort_column_label(sort_state)
+    normalized_sort = normalize_sort_state(sort_state)
+    return nil unless normalized_sort
+
+    SORT_COLUMN_LABELS[normalized_sort["column"]]
+  end
+  module_function :sort_column_label
+
+  def normalize_sort_column(order_column)
+    if order_column.is_a?(Integer)
+      return order_column if SORT_COLUMN_KEYS[order_column]
+      return nil
+    end
+
+    return nil unless order_column.is_a?(String) && order_column.match?(/\A\d+\z/)
+
+    column_index = order_column.to_i
+    SORT_COLUMN_KEYS[column_index] ? column_index : nil
+  end
+
+  def sort_ids_with_state(ids, sort_state, duplicate_values: false)
+    return ids unless sort_state
+
+    sort_column = sort_column_name(sort_state)
+    return ids unless sort_column
+
+    database = Database.instance
+    novels_data = ids.filter_map do |id|
+      data = database[id.to_i]
+      next unless data
+
+      [id, duplicate_values ? data.dup : data]
+    end
+
+    debug_puts "[DEBUG] Found #{novels_data.length} novels with data for #{sort_column}"
+    debug_puts "[DEBUG] Before sort: #{novels_data.map { |novel| [novel[0], novel[1][sort_column]] }.inspect}"
+
+    novels_data.sort! do |a, b|
+      val_a = a[1][sort_column] || 0
+      val_b = b[1][sort_column] || 0
+      comparison = compare_sort_values(val_a, val_b)
+      result = sort_state["dir"] == "desc" ? -comparison : comparison
+      debug_puts "[DEBUG] Comparing ID #{a[0]} (#{val_a}) vs ID #{b[0]} (#{val_b}) => #{result}"
+      result
+    end
+
+    debug_puts "[DEBUG] After sort: #{novels_data.map { |novel| [novel[0], novel[1][sort_column]] }.inspect}"
+    novels_data.map { |novel| novel[0] }
+  end
+
+  def compare_sort_values(val_a, val_b)
+    if val_a.is_a?(Numeric) && val_b.is_a?(Numeric)
+      val_a <=> val_b
+    else
+      val_a.to_s <=> val_b.to_s
+    end
+  end
+  module_function :compare_sort_values
 
   def debug_puts(message)
     puts message if ENV["NAROU_DEBUG"] == "1"

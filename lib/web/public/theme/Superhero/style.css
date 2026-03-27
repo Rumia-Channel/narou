@@ -37,3 +37,33 @@
 .queue.active .queue__sizes {
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Superhero theme) */
+.dt-button-collection,
+.dt-colvis-menu {
+  background-color: #4E5D6C !important;
+  color: #ebebeb !important;
+  border-color: #485563 !important;
+}
+
+.dt-button-collection button,
+.dt-colvis-menu button {
+  color: #ebebeb !important;
+  background-color: transparent !important;
+}
+
+.dt-button-collection button:hover,
+.dt-colvis-menu button:hover {
+  background-color: #485563 !important;
+  color: #ebebeb !important;
+}
+
+.dt-button-collection .dt-button-split-drop,
+.dt-colvis-menu .dt-button-split-drop {
+  border-color: #485563 !important;
+}
+
+.dt-button-collection .dt-button-split-wrapper,
+.dt-colvis-menu .dt-button-split-wrapper {
+  border-color: #485563 !important;
+}

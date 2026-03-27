@@ -47,3 +47,21 @@
   color: white !important;
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Cerulean theme) */
+.dt-button-collection,
+.dt-colvis-menu {
+  background-color: #fff !important;
+  color: #333 !important;
+}
+
+.dt-button-collection button,
+.dt-colvis-menu button {
+  color: #333 !important;
+}
+
+.dt-button-collection button:hover,
+.dt-colvis-menu button:hover {
+  background-color: #e6f2f8 !important;
+  color: #333 !important;
+}

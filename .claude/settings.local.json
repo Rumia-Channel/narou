@@ -6,7 +6,9 @@
       "mcp__serena__find_symbol",
       "mcp__serena__search_for_pattern",
       "mcp__serena__activate_project",
-      "mcp__serena__think_about_collected_information"
+      "mcp__serena__think_about_collected_information",
+      "mcp__serena__think_about_whether_you_are_done",
+      "mcp__serena__list_memories"
     ]
   }
 }

@@ -1,6 +1,7 @@
 require "time"
 require "thread"
 require_relative "../../inventory"
+require_relative "../../web/server_helpers"
 
 module Command
   class Update
@@ -121,23 +122,18 @@ module Command
         begin
           # WebWorkerを使用して非同期実行
           if defined?(Narou::WebWorker)
-            Narou::WebWorker.push do
+            Narou::WebWorker.push_command("auto_update", []) do
               puts "自動アップデート処理を開始します"
               begin
-                # 同一プロセス内でupdateコマンドを実行して詳細ログを表示
                 require_relative "../update"
                 
                 update_command = Command::Update.new
                 
-                # WebUIのソート設定を取得して適用
                 server_setting = Inventory.load("server_setting", :global)
-                current_sort = server_setting["current_sort"]
-                if current_sort && current_sort["column"] && current_sort["dir"]
-                  # WebUIソート設定をコマンドライン用に変換
-                  column_names = ["id", "last_update", "general_lastup", "last_check_date", "title", "author", "sitename", "novel_type", "tags", "general_all_no", "length", "status", "toc_url"]
-                  sort_column = column_names[current_sort["column"]]
-                  if sort_column && ["id", "last_update", "general_lastup", "last_check_date"].include?(sort_column)
-                    # updateコマンドでサポートされているソートキーのみ適用
+                current_sort = Narou::ServerHelpers.normalize_sort_state(server_setting["current_sort"])
+                if current_sort
+                  sort_column = Narou::ServerHelpers.sort_column_name(current_sort)
+                  if ["id", "last_update", "general_lastup", "last_check_date"].include?(sort_column)
                     argv_with_sort = ["--sort-by", sort_column]
                     puts "自動アップデート: WebUIソート設定を適用 (#{sort_column} #{current_sort["dir"]})"
                   else
@@ -149,7 +145,6 @@ module Command
                   puts "自動アップデート: デフォルトソート順序で実行"
                 end
                 
-                # exitを回避するため、execute内でのexitをrescueする
                 begin
                   update_command.execute(argv_with_sort)
                   puts "自動アップデートが正常に完了しました"

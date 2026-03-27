@@ -51,3 +51,33 @@ body {
   color: white !important;
   background-color: #d9534f !important;
 }
+
+/* DataTables Buttons - Column Visibility Dialog (Darkly theme) */
+.dt-button-collection,
+.dt-colvis-menu {
+  background-color: #222 !important;
+  color: #fff !important;
+  border-color: #375a7f !important;
+}
+
+.dt-button-collection button,
+.dt-colvis-menu button {
+  color: #fff !important;
+  background-color: transparent !important;
+}
+
+.dt-button-collection button:hover,
+.dt-colvis-menu button:hover {
+  background-color: #375a7f !important;
+  color: #fff !important;
+}
+
+.dt-button-collection .dt-button-split-drop,
+.dt-colvis-menu .dt-button-split-drop {
+  border-color: #375a7f !important;
+}
+
+.dt-button-collection .dt-button-split-wrapper,
+.dt-colvis-menu .dt-button-split-wrapper {
+  border-color: #375a7f !important;
+}

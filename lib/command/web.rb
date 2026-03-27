@@ -140,28 +140,45 @@ module Command
       puts "サーバを止めるには Ctrl+C を入力"
       puts
 
+      debug_log("push_server.run start")
       push_server.run
+      debug_log("push_server.run done")
       open_browser_when_server_boot(address)
       send_rebooted_event_when_connection_recover(push_server)
 
+      debug_log("before $stdout reassign")
       $stdout = Narou::StreamingLogger.new(push_server)
       $stdout2 = if Inventory.load["concurrency"]
                    Narou::StreamingLogger.new(push_server, $stdout2, target_console: "stdout2")
                  else
                    $stdout
                  end
+      debug_log("after $stdout reassign")
       ProgressBar.push_server = push_server
       if worker_available?
         Narou::Worker.push_server = push_server
       end
       Narou::AppServer.push_server = push_server
+      debug_log("before WebWorker.run")
       Narou::WebWorker.run
+      debug_log("after WebWorker.run")
 
       # 自動アップデートスケジューラーを開始
       require_relative "update/scheduler"
+      debug_log("before Scheduler.start")
       Command.load_command("update")::Scheduler.start
+      debug_log("before AppServer.run!")
 
-      Narou::AppServer.run!
+      debug_log("Starting AppServer...")
+      begin
+        server = Narou::AppServer.run!
+        wait_for_appserver(server)
+      rescue => e
+        STDERR.puts "[ERROR] AppServer.run! raised: #{e.class}: #{e.message}"
+        STDERR.puts e.backtrace.first(10).join("\n")
+        raise
+      end
+      debug_log("AppServer exited!")
 
       # 自動アップデートスケジューラーを停止
       Command.load_command("update")::Scheduler.stop
@@ -214,6 +231,16 @@ module Command
       defined?(Narou::Worker)
     end
 
+    # Puma handler may return immediately in non-interactive environments.
+    # If run! returns, keep the process alive while the app server is running.
+    def wait_for_appserver(server)
+      if server.respond_to?(:join)
+        server.join
+      elsif Narou::AppServer.respond_to?(:running?) && Narou::AppServer.running?
+        sleep 0.2 while Narou::AppServer.running?
+      end
+    end
+
     def load_web_dependencies
       require_relative "../narou_logger"
       require_relative "../downloader"
@@ -221,6 +248,10 @@ module Command
       require_relative "../database"
       require_relative "../html"
       require_relative "../web/all"
+    end
+
+    def debug_log(message)
+      STDERR.puts "[DEBUG] #{message}" if ENV["NAROU_DEBUG"] == "1"
     end
 
   end
