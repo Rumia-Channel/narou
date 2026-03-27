@@ -1662,6 +1662,28 @@ class Narou::AppServer < Sinatra::Base
     })
   end
 
+  post "/api/reorder_pending_tasks" do
+    task_ids = Array(params["task_ids"]).map(&:to_s)
+    halt(400, json({ error: "task_ids is required" })) if task_ids.empty?
+
+    if Narou::WebWorker.reorder_pending_tasks(task_ids)
+      json({ status: "ok" })
+    else
+      halt(400, json({ error: "キューの並べ替えに失敗しました" }))
+    end
+  end
+
+  post "/api/remove_pending_task" do
+    task_id = params["task_id"].to_s
+    halt(400, json({ error: "task_id is required" })) if task_id.empty?
+
+    if Narou::WebWorker.remove_pending_task(task_id)
+      json({ status: "ok" })
+    else
+      halt(404, json({ error: "キューから削除できませんでした" }))
+    end
+  end
+
   post "/api/confirm_running_tasks" do
     rerun = params["rerun"] == "true"
     Narou::WebWorker.instance.process_confirmed_running_tasks(rerun: rerun)
