@@ -59,6 +59,14 @@ module Narou
         instance.get_running_tasks
       end
 
+      def reorder_pending(task_ids)
+        instance.reorder_pending(task_ids)
+      end
+
+      def remove_pending(task_id)
+        instance.remove_pending(task_id)
+      end
+
       def restore
         instance.restore
       end
@@ -183,6 +191,32 @@ module Narou
 
     def get_running_tasks
       synchronize { @running.dup }
+    end
+
+    def reorder_pending(task_ids)
+      synchronize do
+        task_ids = Array(task_ids).map(&:to_s)
+        pending_ids = @pending.map { |task| task["id"].to_s }
+        return false unless task_ids.size == pending_ids.size && task_ids.sort == pending_ids.sort
+
+        order = task_ids.each_with_index.to_h
+        @pending.sort_by! { |task| order.fetch(task["id"].to_s) }
+        @pending_count = @pending.size
+        save_to_file
+        true
+      end
+    end
+
+    def remove_pending(task_id)
+      synchronize do
+        task = @pending.find { |pending_task| pending_task["id"] == task_id }
+        return false unless task
+
+        @pending.delete(task)
+        @pending_count = @pending.size
+        save_to_file
+        true
+      end
     end
 
     def restore

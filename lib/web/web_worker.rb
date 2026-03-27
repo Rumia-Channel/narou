@@ -21,13 +21,16 @@ module Narou
     end
 
     def initialize
-      @queue = Queue.new
+      @queue = []
+      @queue_mutex = Mutex.new
+      @queue_condition = ConditionVariable.new
       @size = 0
       @mutex = Mutex.new
       @worker_thread = nil
       @push_server = Narou::PushServer.instance
       @cancel_signal = false
       @thread_of_block_executing = nil
+      @active_task_id = nil
       @pending_running_tasks = []
       @waiting_confirmation = false
     end
@@ -69,6 +72,62 @@ module Narou
       end
     end
 
+    def self.reorder_pending_tasks(task_ids)
+      instance.reorder_pending_tasks(task_ids)
+    end
+
+    def reorder_pending_tasks(task_ids)
+      task_ids = Array(task_ids).map(&:to_s)
+      reordered = false
+
+      @queue_mutex.synchronize do
+        pending_entries = @queue.select { |entry| entry[:task_id] }
+        pending_ids = pending_entries.map { |entry| entry[:task_id].to_s }
+        return false unless task_ids.size == pending_ids.size && task_ids.sort == pending_ids.sort
+
+        entries_by_id = pending_entries.each_with_object({}) do |entry, hash|
+          hash[entry[:task_id].to_s] = entry
+        end
+        reordered_entries = task_ids.map { |task_id| entries_by_id.fetch(task_id) }
+        reordered_queue = []
+        reorder_index = 0
+
+        @queue.each do |entry|
+          if entry[:task_id]
+            reordered_queue << reordered_entries[reorder_index]
+            reorder_index += 1
+          else
+            reordered_queue << entry
+          end
+        end
+
+        @queue = reordered_queue
+        reordered = true
+      end
+
+      reordered && PersistentQueue.reorder_pending(task_ids)
+    end
+
+    def self.remove_pending_task(task_id)
+      instance.remove_pending_task(task_id)
+    end
+
+    def remove_pending_task(task_id)
+      task_id = task_id.to_s
+      removed_entry = nil
+
+      @queue_mutex.synchronize do
+        index = @queue.index { |entry| entry[:task_id].to_s == task_id }
+        removed_entry = @queue.delete_at(index) if index
+      end
+
+      return false unless removed_entry
+      return false unless PersistentQueue.remove_pending(task_id)
+
+      countdown if removed_entry[:counting]
+      true
+    end
+
     def running?
       !@worker_thread.!
     end
@@ -77,25 +136,24 @@ module Narou
       return if running?
       @worker_thread = Thread.new do
         loop do
+          q = nil
           begin
-            q = @queue.pop
-            if canceled?
-              @queue.clear
-              @cancel_signal = false
-            else
-              task_id = q[:task_id]
-              PersistentQueue.start(task_id) if task_id
-              @thread_of_block_executing = Thread.new do
-                q[:block]&.call
-              end
-              @thread_of_block_executing.join
-              @thread_of_block_executing = nil
-              PersistentQueue.complete(task_id) if task_id
+            q = pop_queue_item
+            task_id = q[:task_id]
+            @active_task_id = task_id
+            PersistentQueue.start(task_id) if task_id
+            @thread_of_block_executing = Thread.new do
+              q[:block]&.call
             end
+            @thread_of_block_executing.join
+            @thread_of_block_executing = nil
+            PersistentQueue.complete(task_id) if task_id
           rescue SystemExit
+          rescue Interrupt
           rescue Exception => e
             output_error($stdout, e)
           ensure
+            @active_task_id = nil
             if q && q[:counting]
               countdown
             end
@@ -109,12 +167,27 @@ module Narou
     end
 
     def cancel
+      discarded_task_ids = []
+      active_task_id = nil
+
       @mutex.synchronize do
         if @size > 0
           @cancel_signal = true
+          active_task_id = @active_task_id
           @size = 0
           @thread_of_block_executing&.raise(Interrupt)
         end
+      end
+
+      discarded_task_ids = clear_pending_queue_entries
+      discarded_task_ids.each do |task_id|
+        PersistentQueue.remove_pending(task_id)
+      end
+      PersistentQueue.discard(active_task_id) if active_task_id
+
+      @mutex.synchronize do
+        @cancel_signal = false
+        notification_queue
       end
       Thread.pass
     end
@@ -158,7 +231,7 @@ module Narou
     def push_command(cmd, args = [], meta = {}, &block)
       countup
       task = PersistentQueue.push(cmd, args, meta)
-      @queue.push(block: block, task_id: task["id"], counting: true, cmd: cmd, args: args, meta: meta)
+      enqueue_task(block: block, task_id: task["id"], counting: true, cmd: cmd, args: args, meta: meta)
       task
     end
 
@@ -177,7 +250,7 @@ module Narou
         task = PersistentQueue.push(cmd, args, meta)
         task_id = task["id"]
       end
-      @queue.push(block: block, task_id: task_id, counting: counting)
+      enqueue_task(block: block, task_id: task_id, counting: counting)
     end
 
     def notification_queue
@@ -265,7 +338,7 @@ module Narou
 
     def enqueue_restored_task(task, &block)
       countup
-      @queue.push(
+      enqueue_task(
         block: block,
         task_id: task["id"],
         counting: true,
@@ -390,6 +463,28 @@ module Narou
         end
       else
         nil
+      end
+    end
+
+    def enqueue_task(**task)
+      @queue_mutex.synchronize do
+        @queue << task
+        @queue_condition.signal
+      end
+    end
+
+    def pop_queue_item
+      @queue_mutex.synchronize do
+        @queue_condition.wait(@queue_mutex) while @queue.empty?
+        @queue.shift
+      end
+    end
+
+    def clear_pending_queue_entries
+      @queue_mutex.synchronize do
+        task_ids = @queue.filter_map { |entry| entry[:task_id]&.to_s }
+        @queue.clear
+        task_ids
       end
     end
   end
