@@ -582,8 +582,12 @@ module Helper
 
         # Output reading threads
         out_t = Thread.new { stdout.read }
+	# Wait child process finish
+	out_t.join
+	stdout.close
         err_t = Thread.new { stderr.read }
-
+	err_t.join
+	stderr.close
         # Monitoring loop
         loop do
           # Check if process finished
