@@ -483,11 +483,8 @@ module Narou
         end
       when "auto_update"
         lambda do
-          puts "自動アップデート処理を開始します（復元）"
           begin
-            update_command = Command.load_command("update").new
-            update_command.execute(args)
-            puts "自動アップデートが完了しました"
+            Command::Update::Scheduler.run_auto_update_job(restored: true)
           rescue => e
             puts "自動アップデート処理中にエラーが発生しました: #{e.message}"
           end
