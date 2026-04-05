@@ -132,10 +132,12 @@ class Narou::AppServer < Sinatra::Base
   end
 
   def check_and_restore_pending_tasks
-    return unless Narou::WebWorker.has_pending_tasks?
-    count = Narou::WebWorker.restore_and_execute_pending_tasks
+    count = Narou::PersistentQueue.pending_count + Narou::PersistentQueue.running_count
+    return if count.zero?
+
+    Narou::WebWorker.instance.mark_restorable_tasks_available
     if count > 0
-      puts "<yellow>前回未完了のタスクが#{count}件見つかりました。再実行します。</yellow>".termcolor
+      puts "<yellow>前回未完了のタスクが#{count}件見つかりました。WEB UI から再開できます。</yellow>".termcolor
     end
   end
 
@@ -1645,7 +1647,7 @@ class Narou::AppServer < Sinatra::Base
 
   get "/api/get_queue_size" do
     res = [
-      Narou::WebWorker.instance.size, Narou::Worker.size
+      Narou::WebWorker.instance.display_size, Narou::Worker.size
     ]
     json res
   end
@@ -1658,7 +1660,8 @@ class Narou::AppServer < Sinatra::Base
       running: running,
       pending_count: pending.size,
       running_count: running.size,
-      waiting_confirmation: Narou::WebWorker.instance.waiting_confirmation?
+      restore_prompt_pending: Narou::WebWorker.instance.restore_prompt_pending?,
+      restorable_tasks_available: Narou::WebWorker.instance.restorable_tasks_available?
     })
   end
 
@@ -1684,10 +1687,35 @@ class Narou::AppServer < Sinatra::Base
     end
   end
 
-  post "/api/confirm_running_tasks" do
-    rerun = params["rerun"] == "true"
-    Narou::WebWorker.instance.process_confirmed_running_tasks(rerun: rerun)
+  post "/api/restore_pending_tasks" do
+    count = Narou::WebWorker.instance.resume_restorable_tasks
+    json({ status: "ok", count: count })
+  end
+
+  post "/api/defer_restore_pending_tasks" do
+    Narou::WebWorker.defer_restorable_tasks
     json({ status: "ok" })
+  end
+
+  post "/api/cancel_running_task" do
+    task_id = params["task_id"].to_s
+    halt(400, json({ error: "task_id is required" })) if task_id.empty?
+
+    if Narou::WebWorker.cancel_active_task(task_id)
+      json({ status: "ok" })
+    else
+      halt(404, json({ error: "実行中の処理を中断できませんでした" }))
+    end
+  end
+
+  post "/api/confirm_running_tasks" do
+    if params["rerun"] == "true"
+      count = Narou::WebWorker.instance.resume_restorable_tasks
+      json({ status: "ok", count: count })
+    else
+      Narou::WebWorker.defer_restorable_tasks
+      json({ status: "ok" })
+    end
   end
 
   post "/api/update_general_lastup" do

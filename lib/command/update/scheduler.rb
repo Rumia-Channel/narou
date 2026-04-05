@@ -6,6 +6,8 @@ require_relative "../../web/server_helpers"
 module Command
   class Update
     class Scheduler
+      AUTO_UPDATE_SORT_COLUMNS = ["id", "last_update", "general_lastup", "last_check_date"].freeze
+
       def initialize
         @thread = nil
         @running = false
@@ -123,41 +125,8 @@ module Command
           # WebWorkerを使用して非同期実行
           if defined?(Narou::WebWorker)
             Narou::WebWorker.push_command("auto_update", []) do
-              puts "自動アップデート処理を開始します"
               begin
-                require_relative "../update"
-                
-                update_command = Command::Update.new
-                
-                server_setting = Inventory.load("server_setting", :global)
-                current_sort = Narou::ServerHelpers.normalize_sort_state(server_setting["current_sort"])
-                if current_sort
-                  sort_column = Narou::ServerHelpers.sort_column_name(current_sort)
-                  if ["id", "last_update", "general_lastup", "last_check_date"].include?(sort_column)
-                    argv_with_sort = ["--sort-by", sort_column]
-                    puts "自動アップデート: WebUIソート設定を適用 (#{sort_column} #{current_sort["dir"]})"
-                  else
-                    argv_with_sort = []
-                    puts "自動アップデート: デフォルトソート順序で実行"
-                  end
-                else
-                  argv_with_sort = []
-                  puts "自動アップデート: デフォルトソート順序で実行"
-                end
-                
-                begin
-                  update_command.execute(argv_with_sort)
-                  puts "自動アップデートが正常に完了しました"
-                rescue SystemExit => e
-                  case e.status
-                  when 0
-                    puts "自動アップデートが正常に完了しました"
-                  when 1..9
-                    puts "自動アップデートが完了しました（#{e.status}件の小説でエラーがありました）"
-                  else
-                    puts "自動アップデートで重大なエラーが発生しました（終了コード: #{e.status}）"
-                  end
-                end
+                self.class.run_auto_update_job
               rescue => e
                 puts "自動アップデート処理中にエラーが発生しました: #{e.message}"
                 puts "バックトレース: #{e.backtrace.first(3).join(', ')}"
@@ -176,6 +145,93 @@ module Command
       end
 
       class << self
+        def run_auto_update_job(restored: false)
+          puts(restored ? "自動アップデート処理を開始します（復元）" : "自動アップデート処理を開始します")
+
+          sort_argv = build_auto_update_sort_argv
+
+          puts "自動アップデート: なろうAPIで更新確認を行います"
+          return false unless run_update_phase(["--gl", "narou"], "なろうAPIによる更新確認")
+
+          modified_ids, other_ids = collect_auto_update_target_ids
+
+          if modified_ids.empty?
+            puts "自動アップデート: modified タグの付いた小説はありません"
+          else
+            puts "自動アップデート: modified タグの付いた小説を更新します (#{modified_ids.size}件)"
+            return false unless run_update_phase(sort_argv + modified_ids, "modified タグ更新")
+          end
+
+          if other_ids.empty?
+            puts "自動アップデート: 通常更新の対象となるその他小説はありません"
+          else
+            puts "自動アップデート: その他小説を通常更新します (#{other_ids.size}件)"
+            return false unless run_update_phase(sort_argv + other_ids, "その他小説更新")
+          end
+
+          puts "自動アップデートが正常に完了しました"
+          true
+        end
+
+        def build_auto_update_sort_argv
+          server_setting = Inventory.load("server_setting", :global)
+          current_sort = Narou::ServerHelpers.normalize_sort_state(server_setting["current_sort"])
+          sort_column = Narou::ServerHelpers.sort_column_name(current_sort)
+
+          if AUTO_UPDATE_SORT_COLUMNS.include?(sort_column)
+            puts "自動アップデート: WebUIソート設定を適用 (#{sort_column} #{current_sort["dir"]})"
+            ["--sort-by", sort_column]
+          else
+            puts "自動アップデート: デフォルトソート順序で実行"
+            []
+          end
+        end
+
+        def collect_auto_update_target_ids
+          database = Database.instance
+          modified_ids = Array(database.tag_indexies[Narou::MODIFIED_TAG]).map(&:to_i).uniq
+          modified_id_set = modified_ids.each_with_object({}) { |id, hash| hash[id] = true }
+          other_ids = []
+
+          database.each do |id, _data|
+            next if modified_id_set[id.to_i]
+
+            setting = Downloader.get_sitesetting_by_target(id)
+            api_supported = setting && setting["narou_api_url"]
+            setting&.clear
+            next if api_supported
+
+            other_ids << id.to_s
+          end
+
+          [modified_ids.map(&:to_s), other_ids]
+        end
+
+        def run_update_phase(argv, label)
+          update_command = Command::Update.new
+          update_command.execute(argv)
+          puts "#{label} が完了しました"
+          true
+        rescue Interrupt
+          raise
+        rescue SystemExit => e
+          handle_update_phase_exit_status(label, e.status)
+        end
+
+        def handle_update_phase_exit_status(label, status)
+          case status
+          when 0
+            puts "#{label} が完了しました"
+            true
+          when 1..9
+            puts "#{label} が完了しました（#{status}件の小説でエラーがありました）"
+            true
+          else
+            puts "#{label} で重大なエラーが発生しました（終了コード: #{status}）"
+            false
+          end
+        end
+
         def instance
           @instance ||= new
         end

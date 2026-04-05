@@ -31,45 +31,27 @@ module Narou
       @cancel_signal = false
       @thread_of_block_executing = nil
       @active_task_id = nil
-      @pending_running_tasks = []
-      @waiting_confirmation = false
+      @restore_prompt_pending = false
+      @restorable_tasks_available = false
     end
 
-    def waiting_confirmation?
-      @waiting_confirmation
+    def restore_prompt_pending?
+      @mutex.synchronize { @restore_prompt_pending }
     end
 
-    def get_pending_running_tasks
-      @pending_running_tasks.dup
+    def restorable_tasks_available?
+      @mutex.synchronize { @restorable_tasks_available } && PersistentQueue.has_pending_or_running?
     end
 
-    def process_confirmed_running_tasks(rerun: true)
-      tasks_to_process = @mutex.synchronize do
-        tasks = @pending_running_tasks
-        @pending_running_tasks = []
-        @waiting_confirmation = false
-        tasks
+    def mark_restorable_tasks_available
+      has_tasks = PersistentQueue.has_pending_or_running?
+
+      @mutex.synchronize do
+        @restore_prompt_pending = has_tasks
+        @restorable_tasks_available = has_tasks
       end
 
-      if rerun
-        tasks_to_process.each do |task|
-          cmd = task["cmd"]
-          args = task["args"] || []
-          meta = task["meta"] || {}
-          puts "<yellow>[復元] 中断タスクを再実行します: #{cmd} #{args.join(' ')}</yellow>".termcolor
-          block = build_block_from_task(cmd, args, meta)
-          if block
-            PersistentQueue.requeue(task["id"])
-            enqueue_restored_task(task, &block)
-          else
-            PersistentQueue.discard(task["id"])
-          end
-        end
-      else
-        tasks_to_process.each do |task|
-          PersistentQueue.complete(task["id"])
-        end
-      end
+      has_tasks
     end
 
     def self.reorder_pending_tasks(task_ids)
@@ -83,6 +65,7 @@ module Narou
       @queue_mutex.synchronize do
         pending_entries = @queue.select { |entry| entry[:task_id] }
         pending_ids = pending_entries.map { |entry| entry[:task_id].to_s }
+        return PersistentQueue.reorder_pending(task_ids) if pending_entries.empty? && restorable_tasks_available?
         return false unless task_ids.size == pending_ids.size && task_ids.sort == pending_ids.sort
 
         entries_by_id = pending_entries.each_with_object({}) do |entry, hash|
@@ -121,10 +104,18 @@ module Narou
         removed_entry = @queue.delete_at(index) if index
       end
 
-      return false unless removed_entry
-      return false unless PersistentQueue.remove_pending(task_id)
+      if removed_entry
+        return false unless PersistentQueue.remove_pending(task_id)
 
-      countdown if removed_entry[:counting]
+        countdown if removed_entry[:counting]
+        return true
+      end
+
+      removed = PersistentQueue.remove_pending(task_id)
+      return false unless removed
+
+      sync_restore_state
+      notification_queue
       true
     end
 
@@ -139,6 +130,7 @@ module Narou
           q = nil
           begin
             q = pop_queue_item
+            @cancel_signal = false
             task_id = q[:task_id]
             @active_task_id = task_id
             PersistentQueue.start(task_id) if task_id
@@ -190,6 +182,30 @@ module Narou
         notification_queue
       end
       Thread.pass
+    end
+
+    def self.cancel_active_task(task_id)
+      instance.cancel_active_task(task_id)
+    end
+
+    def cancel_active_task(task_id)
+      task_id = task_id.to_s
+      canceled = false
+
+      @mutex.synchronize do
+        return false unless @active_task_id.to_s == task_id
+        return false unless @thread_of_block_executing
+
+        @cancel_signal = true
+        PersistentQueue.discard(task_id)
+        @thread_of_block_executing.raise(Interrupt)
+        canceled = true
+      end
+
+      Narou::Worker.cancel if canceled && Narou.concurrency_enabled?
+      notification_queue if canceled
+      Thread.pass if canceled
+      canceled
     end
 
     def self.canceled?
@@ -254,7 +270,7 @@ module Narou
     end
 
     def notification_queue
-      @push_server.send_all("notification.queue" => [@size, Narou::Worker.size])
+      @push_server.send_all("notification.queue" => [display_size, Narou::Worker.size])
     end
 
     def countup
@@ -272,15 +288,19 @@ module Narou
       end
     end
 
+    def display_size
+      [@size, PersistentQueue.pending_count + PersistentQueue.running_count].max
+    end
+
     #
     # 未完了タスクの復元と再実行
     # 戻り値: 復元されたタスク数
     #
     def self.restore_and_execute_pending_tasks
-      instance.restore_and_execute_pending_tasks
+      instance.resume_restorable_tasks
     end
 
-    def restore_and_execute_pending_tasks(confirm_running: false)
+    def resume_restorable_tasks
       tasks = PersistentQueue.restore
       running_tasks = tasks.select { |t| t["status"] == "running" }
       pending_tasks = tasks.select { |t| t["status"] == "pending" }
@@ -291,14 +311,23 @@ module Narou
 
       return 0 if total_count.zero?
 
-      if running_count > 0
-        @mutex.synchronize do
-          @pending_running_tasks = running_tasks
-          @waiting_confirmation = true
+      @mutex.synchronize do
+        @restore_prompt_pending = false
+        @restorable_tasks_available = false
+      end
+
+      running_tasks.each do |task|
+        cmd = task["cmd"]
+        args = task["args"] || []
+        meta = task["meta"] || {}
+        puts "<yellow>[復元] 中断タスクを再実行します: #{cmd} #{args.join(' ')}</yellow>".termcolor
+        block = build_block_from_task(cmd, args, meta)
+        if block
+          PersistentQueue.requeue(task["id"])
+          enqueue_restored_task(task, &block)
+        else
+          PersistentQueue.discard(task["id"])
         end
-        @push_server.send_all("queue.pending_running_tasks" => running_tasks)
-        rerun_running = confirm_rerun_running_tasks(running_tasks)
-        process_confirmed_running_tasks(rerun: rerun_running)
       end
 
       pending_tasks.each do |task|
@@ -317,17 +346,21 @@ module Narou
       total_count
     end
 
-    def confirm_rerun_running_tasks(running_tasks)
-      puts "<yellow>前回中断されたタスクが#{running_tasks.size}件あります:</yellow>".termcolor
-      running_tasks.each do |task|
-        puts "  - #{task['cmd']} #{(task['args'] || []).join(' ')}".termcolor
-      end
-      print "<yellow>再実行しますか？ [Y/n]: </yellow>".termcolor
+    def self.defer_restorable_tasks
+      instance.defer_restorable_tasks
+    end
 
-      answer = $stdin.gets&.strip&.downcase
-      answer.nil? || answer.empty? || answer == 'y' || answer == 'yes'
-    rescue SystemCallError
-      true
+    def defer_restorable_tasks
+      PersistentQueue.get_running_tasks.each do |task|
+        PersistentQueue.requeue(task["id"])
+      end
+
+      @mutex.synchronize do
+        @restore_prompt_pending = false
+        @restorable_tasks_available = PersistentQueue.has_pending_or_running?
+      end
+
+      notification_queue
     end
 
     def self.has_pending_tasks?
@@ -450,11 +483,8 @@ module Narou
         end
       when "auto_update"
         lambda do
-          puts "自動アップデート処理を開始します（復元）"
           begin
-            update_command = Command.load_command("update").new
-            update_command.execute(args)
-            puts "自動アップデートが完了しました"
+            Command::Update::Scheduler.run_auto_update_job(restored: true)
           rescue => e
             puts "自動アップデート処理中にエラーが発生しました: #{e.message}"
           end
@@ -485,6 +515,15 @@ module Narou
         task_ids = @queue.filter_map { |entry| entry[:task_id]&.to_s }
         @queue.clear
         task_ids
+      end
+    end
+
+    def sync_restore_state
+      has_tasks = PersistentQueue.has_pending_or_running?
+
+      @mutex.synchronize do
+        @restore_prompt_pending = false unless has_tasks
+        @restorable_tasks_available = has_tasks if @restorable_tasks_available
       end
     end
   end
