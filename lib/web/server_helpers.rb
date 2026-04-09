@@ -157,6 +157,7 @@ module Narou::ServerHelpers
     column_index = order_column.to_i
     SORT_COLUMN_KEYS[column_index] ? column_index : nil
   end
+  module_function :normalize_sort_column
 
   def sort_ids_with_state(ids, sort_state, duplicate_values: false)
     return ids unless sort_state
