@@ -978,6 +978,35 @@ $console-color: white;
   color: #777;
 }
 
+.queue-manager__restore {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.queue-manager__restore-text {
+  flex: 1 1 auto;
+}
+
+.queue-manager__restore-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.queue-manager__prompt-list {
+  max-height: 180px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  color: #555;
+  background: #f7f7f7;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
 .queue-manager__section + .queue-manager__section {
   margin-top: 20px;
 }
@@ -1056,6 +1085,16 @@ $console-color: white;
 }
 
 @media (max-width: 767px) {
+  .queue-manager__restore {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .queue-manager__restore-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .queue-task {
     flex-wrap: wrap;
   }
