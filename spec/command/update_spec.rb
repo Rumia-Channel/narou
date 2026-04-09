@@ -6,6 +6,7 @@
 
 require "commandline"
 require "narou_logger"
+require_relative "../../lib/command/update/scheduler"
 
 describe Command::Update do
   describe "--ignore-all" do
@@ -21,6 +22,18 @@ describe Command::Update do
         CommandLine.run!(%w(update --ignore-all 22))
       }.strip
       expect(cap).to eq "ID:22　もう一度ナデシコへ は凍結中です"
+    end
+  end
+
+  describe Command::Update::Scheduler do
+    describe ".build_auto_update_sort_argv" do
+      it "uses the WebUI sort setting when the stored sort column is valid" do
+        allow(Inventory).to receive(:load).with("server_setting", :global).and_return(
+          "current_sort" => { "column" => "2", "dir" => "desc" }
+        )
+
+        expect(described_class.build_auto_update_sort_argv).to eq(["--sort-by", "general_lastup"])
+      end
     end
   end
 end
