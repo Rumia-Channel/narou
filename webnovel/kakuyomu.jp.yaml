@@ -27,18 +27,52 @@ code: &code
         data = json["props"]["pageProps"]["__APOLLO_STATE__"]
         # work: この作品のデータ
         work = data["Work:#{json["query"]["workId"]}"]
+        next unless work.is_a?(Hash)
+
         # まずTOCを処理する
-        toc = work["tableOfContents"]
-        # workのTOCはTableOfContentsChapterの参照の配列となっているので、それを解決する
-        toc.map! {|v| data[v["__ref"]]}
-        # TableOfContentsChapterにはChapterと各話の配列があるのでそれを取り出し
-        toc.map! {|v| [v["chapter"], v["episodeUnions"]]}
-        # Chapterと各話を一つの配列にフラットにし
-        toc.flatten!
+        toc_refs =
+          if work["tableOfContentsV2"].is_a?(Array) && !work["tableOfContentsV2"].empty?
+            work["tableOfContentsV2"]
+          elsif work["tableOfContents"].is_a?(Array) && !work["tableOfContents"].empty?
+            work["tableOfContents"]
+          else
+            []
+          end
+
+        toc = []
+
+        # 新旧どちらの形式でも参照を解決してTOCを組み立てる
+        toc_refs.each do |ref|
+          next unless ref.is_a?(Hash) && ref["__ref"]
+          chapter_group = data[ref["__ref"]]
+          next unless chapter_group.is_a?(Hash)
+
+          chapter = chapter_group["chapter"]
+          episode_unions = chapter_group["episodeUnions"]
+
+          # 旧形式: tableOfContentsChapter の参照配列を想定
+          # 新形式: tableOfContentsV2 でも中身は同様の参照を辿れる想定
+          items = [chapter, episode_unions].flatten.compact
+          items.each do |item|
+            next unless item.is_a?(Hash) && item["__ref"]
+            toc << data[item["__ref"]]
+          end
+        end
+
+        # もし新形式で chapter_group が直接取れる構造ならそれを拾う
+        if toc.empty?
+          direct_chapter_group = data["TableOfContentsChapter:"]
+          if direct_chapter_group.is_a?(Hash)
+            [direct_chapter_group["chapter"], direct_chapter_group["episodeUnions"]].flatten.compact.each do |item|
+              next unless item.is_a?(Hash) && item["__ref"]
+              toc << data[item["__ref"]]
+            end
+          end
+        end
+
         # Chapterが使われていない場合にあるnilを排除し
         toc.compact!
-        # Chapterと各話は参照なので、それを解決し
-        toc.map! {|v| data[v["__ref"]]}
+
         # 必要な属性値を取り出して「;」でつないでまとめる
         # __typename: ChapterかEpisodeかの判別用
         # level: Chapterにあり1か2かでchapterかsubchapterか判別する
@@ -47,14 +81,22 @@ code: &code
         # title: Chapter、Episode共にタイトルとなる
         # 最後のtitle以外で「;」を含む事は無いはず
         toc_attr = %w(__typename level id publishedAt title)
-        toc.map! {|v| v.slice(*toc_attr).values.join(";")}
+        toc.map! {|v| v.is_a?(Hash) ? v.slice(*toc_attr).values.join(";") : nil}
+        toc.compact!
+
         # 続いてworkの著者を処理する
         # 著者の参照から表示用の名前 activityName を取得する
-        work["author"] = data[work["author"]["__ref"]]["activityName"]
+        author_ref = work["author"]
+        if author_ref.is_a?(Hash) && author_ref["__ref"] && data[author_ref["__ref"]].is_a?(Hash)
+          work["author"] = data[author_ref["__ref"]]["activityName"]
+        end
+
         # alternateAuthorName がある場合は、それも使う。
-        work["author"] = work["alternateAuthorName"] + "／" + work["author"] if work["alternateAuthorName"]
+        work["author"] = work["alternateAuthorName"] + "／" + work["author"] if work["alternateAuthorName"] && work["author"]
+
         # あらすじの改行を<br>に変換し、正規表現を単純化する。<br>はnarourb側で再変換される
-        work["introduction"].gsub!("\n", "<br>")
+        work["introduction"].gsub!("\n", "<br>") if work["introduction"].is_a?(String)
+
         # tagLabelsを個別のタグ行として処理
         if work["tagLabels"] && work["tagLabels"].is_a?(Array) && !work["tagLabels"].empty?
           tag_lines = work["tagLabels"].map {|tag| "tag::#{tag}"}.join("\n")
@@ -62,15 +104,18 @@ code: &code
         else
           work["tagLabels"] = ""
         end
+
         # workからTOC以外に利用する属性を列挙している（tagLabelsは別途処理）
         work_attr = %w(author title serialStatus publicEpisodeCount publishedAt
             editedAt lastEpisodePublishedAt totalCharacterCount introduction)
+
         # HTMLコメントの開始、前処理済みか検知するためのmagicword、
         # TOC以外のworkの利用する属性値、タグデータ、TOC、HTMLコメントの終了を生成し
         str = ["<!---", magicword,
           work.slice(*work_attr).map {|v| v.join("::")},
           work["tagLabels"],
           toc, "--->"].join("\n")
+
         # 元のページデータに挿入する。デバッグ時用に元々のデータはすべて残す。
         source.insert(m.begin(0), str)
         # 元々のデータは基本必要ないのでreplaceを使えば元々のデータはすべて消える。
