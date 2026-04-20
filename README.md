@@ -1,3 +1,10 @@
+# ! ATTENTION !
+2026/04/21 以降 私はこの Narou.rb の更新および機能追加を停止します。  
+後継ソフトとして、長期起動時のメモリ効率や依存関係、インストールの容易化を目指した [Narou.rs](https://github.com/Rumia-Channel/narou.rs.git) の開発へと移ります。
+Bug fix に関しては issue を投げてもらえば改善は行いますが、今まで以上に改善が遅くなる見込みです。
+
+メモリを食いすぎるせいで RAM 4GB の VPS だと長時間起動すると OOM になるのが辛すぎた...
+
 # Narou.rb_MOD - 小説家になろうのダウンローダ＆縦書き整形＆管理アプリ。
 
 プロジェクトを作成していただいた [whiteleaf7](https://github.com/whiteleaf7) 氏、カオスの塊だったこのforkに修正と機能追加を行ってくれた [ponponUSA](https://github.com/ponponusa) 氏に感謝を。
